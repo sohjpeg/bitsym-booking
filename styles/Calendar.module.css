@@ -1,0 +1,122 @@
+.calendarContainer {
+  width: 100%;
+  margin-top: 1.5rem;
+}
+
+.calendarHeader {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.calendarHeader h3 {
+  color: #667eea;
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+.appointmentDetails {
+  background: #f0f4ff;
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  border-left: 4px solid #48bb78;
+}
+
+.appointmentDetails p {
+  margin: 0.5rem 0;
+  color: #1a202c;
+  font-size: 1rem;
+}
+
+.appointmentDetails strong {
+  color: #667eea;
+  margin-right: 0.5rem;
+}
+
+.weekDays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #667eea;
+  text-align: center;
+}
+
+.weekDays div {
+  padding: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.calendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+
+.calendarDay {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 1rem;
+  color: #4a5568;
+  background: white;
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.calendarDay:not(:empty):hover {
+  border-color: #cbd5e0;
+  transform: scale(1.05);
+}
+
+.bookedDay {
+  background: #48bb78 !important;
+  color: white !important;
+  border-color: #38a169 !important;
+  font-weight: 700;
+  animation: highlight 0.5s ease-in-out;
+}
+
+@keyframes highlight {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.bookingInfo {
+  position: absolute;
+  bottom: 2px;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.time {
+  background: rgba(255, 255, 255, 0.9);
+  color: #22543d;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .calendarDay {
+    font-size: 0.85rem;
+  }
+
+  .time {
+    font-size: 0.55rem;
+  }
+
+  .weekDays div {
+    font-size: 0.75rem;
+  }
+}
