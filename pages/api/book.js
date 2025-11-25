@@ -13,7 +13,8 @@
  * 6. Return booking confirmation
  */
 
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseAdmin } from '../../lib/supabase';
+import axios from 'axios';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -37,35 +38,118 @@ export default async function handler(req, res) {
     }
 
     // Find the doctor by name or specialty
-    const searchTerm = doctor || speciality || '';
+    const searchTerm = doctor || speciality || 'unknown';
     let doctors = [];
 
+    // Use supabaseAdmin to bypass RLS if available
+    const dbClient = supabaseAdmin || supabase;
+
     try {
-      // 1. Search by specialty
-      const { data: specialtyDoctors, error: specialtyError } = await supabase
-        .from('doctors')
-        .select(`
-          id,
-          user_id,
-          specialty,
-          user:users!inner(full_name)
-        `)
-        .ilike('specialty', `%${searchTerm}%`);
 
-      if (specialtyError) throw specialtyError;
+      if (doctor) {
+        // LLM-based fuzzy matching for doctor name
+        console.log(`Attempting LLM match for doctor: "${doctor}"`);
 
-      // 2. Search by name (via users table first)
-      const { data: users, error: userError } = await supabase
-        .from('users')
-        .select('id')
-        .ilike('full_name', `%${searchTerm}%`);
+        // 1. Fetch all doctors from the database
+        const { data: allDoctorsDB, error: fetchError } = await dbClient
+          .from('doctors')
+          .select(`
+            id,
+            user_id,
+            specialty,
+            user:users!inner(full_name)
+          `);
 
-      if (userError) throw userError;
+        if (fetchError) {
+          console.error('Error fetching doctors:', fetchError);
+          throw fetchError;
+        }
 
-      let nameDoctors = [];
-      if (users && users.length > 0) {
-        const userIds = users.map(u => u.id);
-        const { data: nd, error: ndError } = await supabase
+        console.log(`Fetched ${allDoctorsDB?.length || 0} doctors from DB`);
+
+        if (!allDoctorsDB || allDoctorsDB.length === 0) {
+          console.log('No doctors found in database.');
+        } else {
+          // 2. Prepare list for LLM
+          const doctorList = allDoctorsDB.map(d => ({
+            id: d.id,
+            name: d.user.full_name,
+            specialty: d.specialty
+          }));
+
+          // 3. Call Groq API for matching
+          const groqApiKey = process.env.GROQ_API_KEY;
+          if (!groqApiKey) {
+            throw new Error('GROQ_API_KEY not configured');
+          }
+
+          const systemPrompt = `You are an intelligent fuzzy matching assistant. Match the user's input name to one of the doctors in the database.
+          
+Database Doctors:
+${JSON.stringify(doctorList, null, 2)}
+
+Instructions:
+1. Find the doctor whose name is the closest match to the User Input.
+2. Handle:
+   - Titles (e.g., "Dr." vs "Dr", "Doctor")
+   - Typos (e.g., "Sohaib" vs "Saheb")
+   - Phonetic similarities
+   - Partial names
+3. Return JSON ONLY:
+{
+  "match_id": "uuid of the matched doctor or null",
+  "confidence": 0.0-1.0 (score of the match)
+}
+`;
+
+          const userPrompt = `User Input: "${doctor}"`;
+
+          const groqResponse = await axios.post(
+            'https://api.groq.com/openai/v1/chat/completions',
+            {
+              model: 'llama-3.3-70b-versatile',
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+              ],
+              temperature: 0.1, // Low temp for precision
+              response_format: { type: 'json_object' }
+            },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${groqApiKey}`
+              }
+            }
+          );
+
+          const aiResponse = groqResponse.data.choices[0].message.content;
+          console.log('Groq matching response:', aiResponse);
+
+          let matchResult;
+          try {
+             matchResult = JSON.parse(aiResponse);
+          } catch (e) {
+             const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+             if (jsonMatch) matchResult = JSON.parse(jsonMatch[0]);
+          }
+
+          if (matchResult && matchResult.match_id && matchResult.confidence > 0.6) {
+             const matchedDoctor = allDoctorsDB.find(d => d.id === matchResult.match_id);
+             if (matchedDoctor) {
+               doctors = [matchedDoctor];
+               console.log(`LLM matched "${doctor}" to "${matchedDoctor.user.full_name}" (Confidence: ${matchResult.confidence})`);
+             }
+          } else {
+             console.log('LLM could not find a confident match.');
+          }
+        }
+      } 
+      
+      // Fallback: If no doctor found by name (or name not provided), try specialty
+      if (doctors.length === 0 && speciality) {
+        console.log(`Searching by specialty: "${speciality}"`);
+        const { data: specialtyDoctors, error: specialtyError } = await supabase
           .from('doctors')
           .select(`
             id,
@@ -73,21 +157,19 @@ export default async function handler(req, res) {
             specialty,
             user:users!inner(full_name)
           `)
-          .in('user_id', userIds);
+          .ilike('specialty', `%${speciality}%`);
 
-        if (ndError) throw ndError;
-        nameDoctors = nd || [];
+        if (specialtyError) throw specialtyError;
+        doctors = specialtyDoctors || [];
       }
-
-      // Combine results
-      const allDoctors = [...(specialtyDoctors || []), ...nameDoctors];
-
-      // Deduplicate by ID
-      doctors = Array.from(new Map(allDoctors.map(item => [item.id, item])).values());
 
     } catch (error) {
       console.error('Doctor query error:', error);
-      return res.status(500).json({ error: 'Failed to find doctor' });
+      return res.status(500).json({ 
+        error: 'Failed to find doctor',
+        details: error.message,
+        stack: error.stack // Temporary for debugging
+      });
     }
 
     if (!doctors || doctors.length === 0) {
@@ -100,7 +182,7 @@ export default async function handler(req, res) {
     const selectedDoctor = doctors[0];
 
     // Check for scheduling conflicts
-    const { data: existingAppointments, error: conflictError } = await supabase
+    const { data: existingAppointments, error: conflictError } = await dbClient
       .from('appointments')
       .select('id')
       .eq('doctor_id', selectedDoctor.id)
@@ -120,7 +202,7 @@ export default async function handler(req, res) {
     }
 
     // Create the appointment
-    const { data: appointment, error: insertError } = await supabase
+    const { data: appointment, error: insertError } = await dbClient
       .from('appointments')
       .insert([
         {
@@ -156,7 +238,7 @@ export default async function handler(req, res) {
     }
 
     // Create notification for the doctor
-    await supabase
+    await dbClient
       .from('notifications')
       .insert([
         {
