@@ -10,7 +10,7 @@ function DoctorDashboard() {
   const [appointments, setAppointments] = useState([]);
   const [doctorData, setDoctorData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('today');
+  const [filter, setFilter] = useState('upcoming');
   const [activeTab, setActiveTab] = useState('dashboard');
 
   useEffect(() => {
@@ -39,45 +39,24 @@ function DoctorDashboard() {
     try {
       setLoading(true);
 
-      // Get doctor ID first
-      const { data: doctorRecord } = await supabase
-        .from('doctors')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!doctorRecord) return;
-
-      let query = supabase
-        .from('appointments')
-        .select(`
-          *,
-          patient:patients(
-            id,
-            date_of_birth,
-            phone_number,
-            user:users(full_name, email)
-          )
-        `)
-        .eq('doctor_id', doctorRecord.id);
-
-      // Apply date filters
-      const today = new Date().toISOString().split('T')[0];
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
-      if (filter === 'today') {
-        query = query.eq('appointment_date', today);
-      } else if (filter === 'upcoming') {
-        query = query.gte('appointment_date', today);
-      } else if (filter === 'pending') {
-        query = query.eq('status', 'pending');
+      if (sessionError || !session) {
+        console.error('No active session');
+        return;
       }
 
-      query = query.order('appointment_date', { ascending: true })
-                   .order('appointment_time', { ascending: true });
+      const response = await fetch(`/api/doctor/appointments?filter=${filter}`, {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
 
-      const { data, error } = await query;
+      if (!response.ok) {
+        throw new Error('Failed to fetch appointments');
+      }
 
-      if (error) throw error;
+      const data = await response.json();
       setAppointments(data || []);
     } catch (error) {
       console.error('Error fetching appointments:', error);
@@ -88,12 +67,29 @@ function DoctorDashboard() {
 
   const updateAppointmentStatus = async (appointmentId, newStatus) => {
     try {
-      const { error } = await supabase
-        .from('appointments')
-        .update({ status: newStatus })
-        .eq('id', appointmentId);
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        console.error('No active session');
+        return;
+      }
 
-      if (error) throw error;
+      const response = await fetch('/api/doctor/appointments', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          id: appointmentId,
+          status: newStatus,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update appointment');
+      }
 
       // Refresh appointments
       fetchAppointments();
@@ -458,6 +454,8 @@ function DoctorDashboard() {
           )}
         </main>
       </div>
+      
+
     </>
   );
 }

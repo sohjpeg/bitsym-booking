@@ -39,30 +39,24 @@ function PatientDashboard() {
     try {
       setLoading(true);
       
-      // Get patient ID first
-      const { data: patientRecord } = await supabase
-        .from('patients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        console.error('No active session');
+        return;
+      }
 
-      if (!patientRecord) return;
+      const response = await fetch('/api/patient/appointments', {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
 
-      // Fetch appointments with doctor details
-      const { data, error } = await supabase
-        .from('appointments')
-        .select(`
-          *,
-          doctor:doctors(
-            id,
-            specialty,
-            user:users(full_name, email)
-          )
-        `)
-        .eq('patient_id', patientRecord.id)
-        .order('appointment_date', { ascending: true });
+      if (!response.ok) {
+        throw new Error('Failed to fetch appointments');
+      }
 
-      if (error) throw error;
+      const data = await response.json();
       setAppointments(data || []);
     } catch (error) {
       console.error('Error fetching appointments:', error);
