@@ -1,6 +1,6 @@
 import { useAuth } from '../../contexts/AuthContext';
 import { withPatient } from '../../lib/withAuth';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import Head from 'next/head';
 import Link from 'next/link';
@@ -14,6 +14,7 @@ function PatientDashboard() {
   const [loading, setLoading] = useState(true);
   const [patientData, setPatientData] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const isInitialMount = useRef(true);
 
   // Sync activeTab with URL hash on mount
   useEffect(() => {
@@ -25,6 +26,11 @@ function PatientDashboard() {
 
   // Update URL hash when activeTab changes
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    
     if (typeof window !== 'undefined') {
       window.location.hash = activeTab;
     }

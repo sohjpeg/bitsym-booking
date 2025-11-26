@@ -1,6 +1,6 @@
 import { useAuth } from '../../contexts/AuthContext';
 import { withDoctor } from '../../lib/withAuth';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
 import Head from 'next/head';
 import { Check, X } from 'lucide-react';
@@ -17,17 +17,23 @@ function DoctorDashboard() {
   const [activeTab, setActiveTab] = useState('dashboard');
 
   const [processingId, setProcessingId] = useState(null);
+  const isInitialMount = useRef(true);
 
   // Sync activeTab with URL hash on mount
   useEffect(() => {
     const hash = window.location.hash.replace('#', '');
-    if (hash && ['dashboard', 'appointments', 'profile', 'settings'].includes(hash)) {
+    if (hash && ['dashboard', 'schedule', 'patients', 'settings'].includes(hash)) {
       setActiveTab(hash);
     }
   }, []);
 
   // Update URL hash when activeTab changes
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
     if (typeof window !== 'undefined') {
       window.location.hash = activeTab;
     }
