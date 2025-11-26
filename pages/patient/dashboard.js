@@ -102,12 +102,16 @@ function PatientDashboard() {
     });
   };
 
-  const upcomingAppointments = appointments.filter(
-    (apt) => apt.status !== 'cancelled' && apt.status !== 'completed'
+  const pendingAppointments = appointments.filter(
+    (apt) => apt.status === 'pending'
+  );
+
+  const confirmedAppointments = appointments.filter(
+    (apt) => apt.status === 'confirmed'
   );
 
   const pastAppointments = appointments.filter(
-    (apt) => apt.status === 'cancelled' || apt.status === 'completed'
+    (apt) => apt.status === 'cancelled' || apt.status === 'completed' || apt.status === 'no-show' || apt.status === 'rejected'
   );
 
   return (
@@ -171,7 +175,7 @@ function PatientDashboard() {
               </h2>
             </div>
             <div className={styles.headerActions}>
-              <Link href="/" className={styles.primaryButton}>
+              <Link href="/book" className={styles.primaryButton}>
                 <span>🎤</span> Book Appointment
               </Link>
               <button onClick={signOut} className={styles.logoutButton}>
@@ -184,10 +188,17 @@ function PatientDashboard() {
             <>
               <div className={styles.statsGrid}>
                 <div className={styles.statCard}>
+                  <div className={styles.statIcon}>⏳</div>
+                  <div className={styles.statInfo}>
+                    <span className={styles.statLabel}>Pending</span>
+                    <span className={styles.statValue}>{pendingAppointments.length}</span>
+                  </div>
+                </div>
+                <div className={styles.statCard}>
                   <div className={styles.statIcon}>📅</div>
                   <div className={styles.statInfo}>
                     <span className={styles.statLabel}>Upcoming</span>
-                    <span className={styles.statValue}>{upcomingAppointments.length}</span>
+                    <span className={styles.statValue}>{confirmedAppointments.length}</span>
                   </div>
                 </div>
                 <div className={styles.statCard}>
@@ -197,14 +208,40 @@ function PatientDashboard() {
                     <span className={styles.statValue}>{pastAppointments.length}</span>
                   </div>
                 </div>
-                <div className={styles.statCard}>
-                  <div className={styles.statIcon}>📊</div>
-                  <div className={styles.statInfo}>
-                    <span className={styles.statLabel}>Total Visits</span>
-                    <span className={styles.statValue}>{appointments.length}</span>
+              </div>
+
+              {/* Pending Requests Section */}
+              {pendingAppointments.length > 0 && (
+                <div className={styles.section} style={{ marginBottom: '2rem' }}>
+                  <div className={styles.sectionHeader}>
+                    <h3 className={styles.sectionTitle}>Pending Requests</h3>
+                  </div>
+                  <div className={styles.appointmentsList}>
+                    {pendingAppointments.map((appointment) => (
+                      <div key={appointment.id} className={styles.appointmentCard} style={{ borderLeft: '4px solid #fbbf24' }}>
+                        <div className={styles.appointmentMain}>
+                          <div className={styles.doctorAvatar}>👨‍⚕️</div>
+                          <div className={styles.appointmentInfo}>
+                            <h4>{appointment.doctor?.user?.full_name || 'Doctor'}</h4>
+                            <p className={styles.specialty}>{appointment.doctor?.specialty || 'General'}</p>
+                          </div>
+                        </div>
+                        <div className={styles.appointmentMeta}>
+                          <div className={styles.metaItem}>
+                            <span>📅</span>
+                            <span>{formatDate(appointment.appointment_date)}</span>
+                          </div>
+                          <div className={styles.metaItem}>
+                            <span>🕐</span>
+                            <span>{formatTime(appointment.appointment_time)}</span>
+                          </div>
+                          {getStatusBadge(appointment.status)}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
+              )}
 
               <div className={styles.section} id="appointments">
                 <div className={styles.sectionHeader}>
@@ -213,16 +250,18 @@ function PatientDashboard() {
 
                 {loading ? (
                   <p>Loading appointments...</p>
-                ) : upcomingAppointments.length === 0 ? (
+                ) : confirmedAppointments.length === 0 ? (
                   <div className={styles.emptyState}>
-                    <p>No upcoming appointments scheduled.</p>
-                    <Link href="/" className={styles.link}>
-                      Book your first appointment →
-                    </Link>
+                    <p>No confirmed upcoming appointments.</p>
+                    {pendingAppointments.length === 0 && (
+                      <Link href="/" className={styles.link}>
+                        Book your first appointment →
+                      </Link>
+                    )}
                   </div>
                 ) : (
                   <div className={styles.appointmentsList}>
-                    {upcomingAppointments.map((appointment) => (
+                    {confirmedAppointments.map((appointment) => (
                       <div key={appointment.id} className={styles.appointmentCard}>
                         <div className={styles.appointmentMain}>
                           <div className={styles.doctorAvatar}>

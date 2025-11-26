@@ -22,6 +22,12 @@ export const AuthProvider = ({ children }) => {
   const router = useRouter();
 
   useEffect(() => {
+    // Failsafe: Force loading to false after 5 seconds to prevent infinite loading
+    const timeoutId = setTimeout(() => {
+      console.warn('Auth check timed out, forcing loading to false');
+      setLoading(false);
+    }, 5000);
+
     // Check active session
     checkUser();
 
@@ -40,6 +46,7 @@ export const AuthProvider = ({ children }) => {
     );
 
     return () => {
+      clearTimeout(timeoutId);
       authListener?.subscription?.unsubscribe();
     };
   }, []);
@@ -48,7 +55,6 @@ export const AuthProvider = ({ children }) => {
     try {
       console.log('Checking user session...');
       const { data: { session }, error } = await supabase.auth.getSession();
-      
       if (error) {
         console.error('Session error:', error);
         setUser(null);
@@ -77,7 +83,7 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUserProfile = async (userId) => {
     try {
-      const { data, error } = await supabase
+      const { data: userData, error } = await supabase
         .from('users')
         .select('*')
         .eq('id', userId)
@@ -90,7 +96,33 @@ export const AuthProvider = ({ children }) => {
         return;
       }
       
-      setUserProfile(data);
+      let profileData = { ...userData };
+
+      // Fetch additional role-specific data
+      if (userData.role === 'patient') {
+        const { data: patientData } = await supabase
+          .from('patients')
+          .select('id')
+          .eq('user_id', userId)
+          .single();
+        
+        if (patientData) {
+          profileData.patient_id = patientData.id;
+        }
+      } else if (userData.role === 'doctor') {
+        const { data: doctorData } = await supabase
+          .from('doctors')
+          .select('id')
+          .eq('user_id', userId)
+          .single();
+          
+        if (doctorData) {
+          profileData.doctor_id = doctorData.id;
+        }
+      }
+
+      console.log('User profile loaded:', profileData);
+      setUserProfile(profileData);
     } catch (error) {
       console.error('Error fetching user profile:', error);
       // Set a minimal profile so app doesn't break
