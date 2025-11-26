@@ -37,27 +37,46 @@ function PatientDashboard() {
 
   const fetchAppointments = async () => {
     try {
-      setLoading(true);
+      // Only show full loading state if we don't have data yet
+      if (appointments.length === 0) {
+        setLoading(true);
+      }
       
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError || !session) {
         console.error('No active session');
+        setLoading(false);
         return;
       }
 
-      const response = await fetch('/api/patient/appointments', {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
+      // Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
-      if (!response.ok) {
-        throw new Error('Failed to fetch appointments');
+      try {
+        const response = await fetch('/api/patient/appointments', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch appointments');
+        }
+
+        const data = await response.json();
+        setAppointments(data || []);
+      } catch (fetchError) {
+        if (fetchError.name === 'AbortError') {
+          console.error('Fetch aborted due to timeout');
+        } else {
+          throw fetchError;
+        }
       }
-
-      const data = await response.json();
-      setAppointments(data || []);
     } catch (error) {
       console.error('Error fetching appointments:', error);
     } finally {
