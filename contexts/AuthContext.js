@@ -161,12 +161,12 @@ export const AuthProvider = ({ children }) => {
       });
 
       if (error) {
-        console.error('Supabase auth signup error:', error);
-        throw error;
+        // Return error instead of throwing to avoid Next.js error overlay
+        return { data: null, error };
       }
 
       if (!data.user) {
-        throw new Error('User creation failed');
+        return { data: null, error: new Error('User creation failed') };
       }
 
       console.log('Signup successful for user:', data.user.id);
