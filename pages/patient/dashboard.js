@@ -4,32 +4,99 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import Head from 'next/head';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import styles from '../../styles/Dashboard.module.css';
 
 function PatientDashboard() {
+  const router = useRouter();
   const { user, userProfile, signOut } = useAuth();
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [patientData, setPatientData] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
 
+  // Sync activeTab with URL hash on mount
   useEffect(() => {
-    if (user) {
-      fetchPatientData();
-      fetchAppointments();
+    const hash = window.location.hash.replace('#', '');
+    if (hash && ['dashboard', 'appointments', 'profile', 'settings'].includes(hash)) {
+      setActiveTab(hash);
     }
-  }, [user]);
+  }, []);
+
+  // Update URL hash when activeTab changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.location.hash = activeTab;
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadData = async () => {
+      if (!user) return;
+      
+      try {
+        setLoading(true);
+        await Promise.all([
+          fetchPatientData(),
+          fetchAppointments()
+        ]);
+      } catch (error) {
+        console.error('Error loading dashboard data:', error);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id]);
 
   const fetchPatientData = async () => {
     try {
-      const { data, error } = await supabase
-        .from('patients')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        console.error('No active session for patient data');
+        return;
+      }
 
-      if (error) throw error;
-      setPatientData(data);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      try {
+        const response = await fetch('/api/patient/profile', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            setPatientData(null);
+            return;
+          }
+          throw new Error('Failed to fetch patient profile');
+        }
+
+        const data = await response.json();
+        setPatientData(data);
+      } catch (fetchError) {
+        if (fetchError.name === 'AbortError') {
+          console.error('Fetch aborted due to timeout');
+        } else {
+          throw fetchError;
+        }
+      }
     } catch (error) {
       console.error('Error fetching patient data:', error);
     }
@@ -37,16 +104,10 @@ function PatientDashboard() {
 
   const fetchAppointments = async () => {
     try {
-      // Only show full loading state if we don't have data yet
-      if (appointments.length === 0) {
-        setLoading(true);
-      }
-      
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError || !session) {
         console.error('No active session');
-        setLoading(false);
         return;
       }
 
@@ -79,8 +140,6 @@ function PatientDashboard() {
       }
     } catch (error) {
       console.error('Error fetching appointments:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -97,8 +156,8 @@ function PatientDashboard() {
     
     return (
       <span
-        className={styles.badge}
-        style={{ background: badge.color }}
+        className={styles.statusBadge}
+        style={{ background: badge.color, color: 'white' }}
       >
         {badge.text}
       </span>

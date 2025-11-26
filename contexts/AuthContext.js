@@ -100,14 +100,25 @@ export const AuthProvider = ({ children }) => {
 
       // Fetch additional role-specific data
       if (userData.role === 'patient') {
-        const { data: patientData } = await supabase
-          .from('patients')
-          .select('id')
-          .eq('user_id', userId)
-          .single();
-        
-        if (patientData) {
-          profileData.patient_id = patientData.id;
+        // Use API to bypass RLS recursion
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          try {
+            const response = await fetch('/api/patient/profile', {
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+              },
+            });
+            
+            if (response.ok) {
+              const patientData = await response.json();
+              if (patientData) {
+                profileData.patient_id = patientData.id;
+              }
+            }
+          } catch (err) {
+            console.error('Failed to fetch patient profile via API:', err);
+          }
         }
       } else if (userData.role === 'doctor') {
         const { data: doctorData } = await supabase

@@ -3,15 +3,35 @@ import { withDoctor } from '../../lib/withAuth';
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import Head from 'next/head';
+import { Check, X } from 'lucide-react';
+import { useRouter } from 'next/router';
 import styles from '../../styles/Dashboard.module.css';
 
 function DoctorDashboard() {
+  const router = useRouter();
   const { user, userProfile, signOut } = useAuth();
   const [appointments, setAppointments] = useState([]);
   const [doctorData, setDoctorData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('upcoming');
   const [activeTab, setActiveTab] = useState('dashboard');
+
+  const [processingId, setProcessingId] = useState(null);
+
+  // Sync activeTab with URL hash on mount
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '');
+    if (hash && ['dashboard', 'appointments', 'profile', 'settings'].includes(hash)) {
+      setActiveTab(hash);
+    }
+  }, []);
+
+  // Update URL hash when activeTab changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.location.hash = activeTab;
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (user) {
@@ -85,11 +105,15 @@ function DoctorDashboard() {
   };
 
   const updateAppointmentStatus = async (appointmentId, newStatus) => {
+    if (processingId) return; // Prevent multiple clicks
+    setProcessingId(appointmentId);
+    
     try {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError || !session) {
         console.error('No active session');
+        setProcessingId(null);
         return;
       }
 
@@ -110,11 +134,18 @@ function DoctorDashboard() {
         throw new Error(errorData.error || 'Failed to update appointment');
       }
 
-      // Refresh appointments
+      // Optimistically update the UI
+      setAppointments(prev => prev.map(apt => 
+        apt.id === appointmentId ? { ...apt, status: newStatus } : apt
+      ));
+      
+      // Background refresh to ensure consistency
       fetchAppointments();
     } catch (error) {
       console.error('Error updating appointment:', error);
       alert('Failed to update appointment status');
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -207,7 +238,9 @@ function DoctorDashboard() {
               Dr
             </div>
             <div className={styles.userInfo}>
-              <span className={styles.userName}>Dr. {userProfile?.full_name?.split(' ')[0] || 'Doctor'}</span>
+              <span className={styles.userName}>
+                {userProfile?.full_name?.startsWith('Dr.') ? userProfile.full_name : `Dr. ${userProfile?.full_name || 'Doctor'}`}
+              </span>
               <span className={styles.userRole}>{doctorData?.specialty || 'Specialist'}</span>
             </div>
           </div>
@@ -218,7 +251,7 @@ function DoctorDashboard() {
             <div>
               <p className={styles.pageTitle}>Pages / {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</p>
               <h2 className={styles.welcomeText}>
-                {activeTab === 'dashboard' ? `Welcome back, Dr. ${userProfile?.full_name?.split(' ')[1] || 'Doctor'}!` : 
+                {activeTab === 'dashboard' ? `Welcome back, ${userProfile?.full_name?.startsWith('Dr.') ? userProfile.full_name : `Dr. ${userProfile?.full_name || 'Doctor'}`}!` : 
                  activeTab === 'schedule' ? 'Your Schedule' :
                  activeTab === 'patients' ? 'My Patients' : 'Settings'}
               </h2>
@@ -327,36 +360,56 @@ function DoctorDashboard() {
                         {appointment.status === 'pending' && (
                           <div className={styles.actionButtons}>
                             <button
-                              className={styles.btnApprove}
+                              className={`p-2 rounded-full bg-green-100 text-green-600 hover:bg-green-200 transition-colors ${processingId === appointment.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                               onClick={() => updateAppointmentStatus(appointment.id, 'confirmed')}
-                              title="Confirm"
+                              title="Confirm Appointment"
+                              disabled={processingId === appointment.id}
                             >
-                              ✓
+                              {processingId === appointment.id ? (
+                                <div className="w-5 h-5 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <Check size={20} />
+                              )}
                             </button>
                             <button
-                              className={styles.btnReject}
+                              className={`p-2 rounded-full bg-red-100 text-red-600 hover:bg-red-200 transition-colors ${processingId === appointment.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                               onClick={() => updateAppointmentStatus(appointment.id, 'cancelled')}
-                              title="Cancel"
+                              title="Reject Appointment"
+                              disabled={processingId === appointment.id}
                             >
-                              ✕
+                              {processingId === appointment.id ? (
+                                <div className="w-5 h-5 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <X size={20} />
+                              )}
                             </button>
                           </div>
                         )}
                         {appointment.status === 'confirmed' && (
                           <div className={styles.actionButtons}>
                             <button
-                              className={styles.btnApprove}
+                              className={`p-2 rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200 transition-colors ${processingId === appointment.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                               onClick={() => updateAppointmentStatus(appointment.id, 'completed')}
-                              title="Complete"
+                              title="Mark as Completed"
+                              disabled={processingId === appointment.id}
                             >
-                              ✓
+                              {processingId === appointment.id ? (
+                                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <Check size={20} />
+                              )}
                             </button>
                             <button
-                              className={styles.btnReject}
+                              className={`p-2 rounded-full bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors ${processingId === appointment.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                               onClick={() => updateAppointmentStatus(appointment.id, 'no-show')}
-                              title="No Show"
+                              title="Mark as No Show"
+                              disabled={processingId === appointment.id}
                             >
-                              ?
+                              {processingId === appointment.id ? (
+                                <div className="w-5 h-5 border-2 border-orange-600 border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <X size={20} />
+                              )}
                             </button>
                           </div>
                         )}
