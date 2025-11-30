@@ -17,6 +17,7 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
@@ -35,10 +36,11 @@ export const AuthProvider = ({ children }) => {
 
     // Listen for auth changes
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (session?.user) {
-          setUser(session.user);
-          await fetchUserProfile(session.user.id);
+      async (event, newSession) => {
+        setSession(newSession);
+        if (newSession?.user) {
+          setUser(newSession.user);
+          await fetchUserProfile(newSession.user.id);
         } else {
           setUser(null);
           setUserProfile(null);
@@ -56,18 +58,22 @@ export const AuthProvider = ({ children }) => {
   const checkUser = async () => {
     try {
       console.log('Checking user session...');
-      const { data: { session }, error } = await supabase.auth.getSession();
+      const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+      
       if (error) {
         console.error('Session error:', error);
         setUser(null);
+        setSession(null);
         setUserProfile(null);
         return;
       }
       
-      if (session?.user) {
-        console.log('User found:', session.user.id);
-        setUser(session.user);
-        await fetchUserProfile(session.user.id);
+      setSession(currentSession);
+
+      if (currentSession?.user) {
+        console.log('User found:', currentSession.user.id);
+        setUser(currentSession.user);
+        await fetchUserProfile(currentSession.user.id);
       } else {
         console.log('No active session');
         setUser(null);
@@ -76,6 +82,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error('Error checking user:', error);
       setUser(null);
+      setSession(null);
       setUserProfile(null);
     } finally {
       console.log('Auth check complete, setting loading to false');
@@ -186,8 +193,9 @@ export const AuthProvider = ({ children }) => {
         password,
       });
 
-      if (error) throw error;
-
+      if (error) {
+        return { data: null, error };
+      }
       return { data, error: null };
     } catch (error) {
       return { data: null, error };
@@ -200,20 +208,25 @@ export const AuthProvider = ({ children }) => {
       
       // Clear local state immediately
       setUser(null);
+      setSession(null);
       setUserProfile(null);
 
-      // Attempt to sign out from Supabase
-      // We use a short timeout to prevent hanging if network is slow
+      // Attempt to sign out from Supabase with a timeout
+      // This prevents the UI from hanging if the network request fails
       const { error } = await Promise.race([
         supabase.auth.signOut(),
-        new Promise((resolve) => setTimeout(() => resolve({ error: null }), 1000))
+        new Promise((resolve) => setTimeout(() => resolve({ error: 'Sign out timed out' }), 2000))
       ]);
-
-      if (error) throw error;
+      
+      if (error) {
+        console.warn('Supabase signOut result:', error);
+      } else {
+        console.log('Supabase signOut successful');
+      }
     } catch (error) {
       console.error('Error signing out:', error);
     } finally {
-      // Always redirect, even if Supabase errors or times out
+      // Always redirect
       if (typeof window !== 'undefined') {
         window.location.href = '/login';
       }
@@ -222,6 +235,7 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
+    session,
     userProfile,
     loading,
     signUp,

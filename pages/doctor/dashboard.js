@@ -23,7 +23,7 @@ import { useRouter } from 'next/router';
 
 function DoctorDashboard() {
   const router = useRouter();
-  const { user, userProfile, signOut } = useAuth();
+  const { user, session, userProfile, signOut } = useAuth();
   const [appointments, setAppointments] = useState([]);
   const [doctorData, setDoctorData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -53,15 +53,64 @@ function DoctorDashboard() {
     }
   }, [activeTab]);
 
+  // Failsafe: Force loading to false after 15 seconds
   useEffect(() => {
-    if (user) {
-      fetchDoctorData();
-      fetchAppointments();
+    if (loading) {
+      const timeoutId = setTimeout(() => {
+        console.warn('Dashboard loading timed out, forcing display');
+        setLoading(false);
+      }, 15000);
+      return () => clearTimeout(timeoutId);
     }
-  }, [user, filter]);
+  }, [loading]);
 
-  const fetchDoctorData = async () => {
+  const getSessionWithTimeout = async () => {
+    // Deprecated: Using session from AuthContext
+    return { data: { session }, error: null };
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadData = async () => {
+      if (!user) return;
+      
+      try {
+        setLoading(true);
+        
+        const token = session?.access_token;
+
+        if (!token) {
+          // If session is not yet available but user is, we might be in a race.
+          // But since AuthContext loads user and session together, this should be rare.
+          console.warn('No access token available yet');
+          return;
+        }
+
+        await Promise.all([
+          fetchDoctorData(token),
+          fetchAppointments(token)
+        ]);
+      } catch (error) {
+        console.error('Error loading dashboard data:', error);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id, session?.access_token, filter]);
+
+  const fetchDoctorData = async (token) => {
     try {
+      if (!token) return;
+
       const { data, error } = await supabase
         .from('doctors')
         .select('*')
@@ -75,19 +124,16 @@ function DoctorDashboard() {
     }
   };
 
-  const fetchAppointments = async () => {
+  const fetchAppointments = async (token) => {
     try {
+      if (!token) {
+        console.error('No token provided for appointments');
+        return;
+      }
+
       // Only show full loading state if we don't have data yet
       if (appointments.length === 0) {
         setLoading(true);
-      }
-
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      
-      if (sessionError || !session) {
-        console.error('No active session');
-        setLoading(false);
-        return;
       }
 
       // Add timeout to prevent hanging
@@ -97,7 +143,7 @@ function DoctorDashboard() {
       try {
         const response = await fetch(`/api/doctor/appointments?filter=${filter}`, {
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${token}`,
           },
           signal: controller.signal,
         });
@@ -129,9 +175,8 @@ function DoctorDashboard() {
     setProcessingId(appointmentId);
     
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      
-      if (sessionError || !session) {
+      // Use session directly from context
+      if (!session) {
         console.error('No active session');
         setProcessingId(null);
         return;
@@ -160,7 +205,10 @@ function DoctorDashboard() {
       ));
       
       // Background refresh to ensure consistency
-      fetchAppointments();
+      // Background refresh to ensure consistency
+      if (session?.access_token) {
+        fetchAppointments(session.access_token);
+      }
     } catch (error) {
       console.error('Error updating appointment:', error);
       alert('Failed to update appointment status');

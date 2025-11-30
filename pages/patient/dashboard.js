@@ -52,6 +52,33 @@ function PatientDashboard() {
     }
   }, [activeTab]);
 
+  // Failsafe: Force loading to false after 15 seconds
+  useEffect(() => {
+    if (loading) {
+      const timeoutId = setTimeout(() => {
+        console.warn('Dashboard loading timed out, forcing display');
+        setLoading(false);
+      }, 15000);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [loading]);
+
+  const getSessionWithTimeout = async () => {
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Session check timed out')), 10000)
+    );
+    
+    try {
+      const sessionPromise = supabase.auth.getSession();
+      const result = await Promise.race([sessionPromise, timeoutPromise]);
+      return result;
+    } catch (error) {
+      console.error('Session check error:', error);
+      // Return null session on timeout so we can handle it gracefully
+      return { data: { session: null }, error };
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
 
@@ -60,9 +87,27 @@ function PatientDashboard() {
       
       try {
         setLoading(true);
+        
+        // Fetch session once to avoid concurrent calls and race conditions
+        const { data: { session }, error: sessionError } = await getSessionWithTimeout();
+        
+        if (sessionError || !session) {
+          console.error('Failed to get active session:', sessionError);
+          // Don't return here, let the functions handle missing token if needed
+          // or just pass null and let them fail gracefully
+        }
+
+        const token = session?.access_token;
+
+        if (!token) {
+          console.warn('No access token available, skipping data fetch');
+          setLoading(false);
+          return;
+        }
+
         await Promise.all([
-          fetchPatientData(),
-          fetchAppointments()
+          fetchPatientData(token),
+          fetchAppointments(token)
         ]);
       } catch (error) {
         console.error('Error loading dashboard data:', error);
@@ -80,12 +125,10 @@ function PatientDashboard() {
     };
   }, [user?.id]);
 
-  const fetchPatientData = async () => {
+  const fetchPatientData = async (token) => {
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      
-      if (sessionError || !session) {
-        console.error('No active session for patient data');
+      if (!token) {
+        console.error('No token provided for patient data');
         return;
       }
 
@@ -95,7 +138,7 @@ function PatientDashboard() {
       try {
         const response = await fetch('/api/patient/profile', {
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${token}`,
           },
           signal: controller.signal,
         });
@@ -124,12 +167,10 @@ function PatientDashboard() {
     }
   };
 
-  const fetchAppointments = async () => {
+  const fetchAppointments = async (token) => {
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      
-      if (sessionError || !session) {
-        console.error('No active session');
+      if (!token) {
+        console.error('No token provided for appointments');
         return;
       }
 
@@ -140,7 +181,7 @@ function PatientDashboard() {
       try {
         const response = await fetch('/api/patient/appointments', {
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${token}`,
           },
           signal: controller.signal,
         });
@@ -205,16 +246,25 @@ function PatientDashboard() {
     });
   };
 
+  const now = new Date();
+
   const pendingAppointments = appointments.filter(
     (apt) => apt.status === 'pending'
   );
 
   const confirmedAppointments = appointments.filter(
-    (apt) => apt.status === 'confirmed'
+    (apt) => {
+      if (apt.status !== 'confirmed') return false;
+      const aptDate = new Date(`${apt.appointment_date}T${apt.appointment_time}`);
+      return aptDate >= now;
+    }
   );
 
   const pastAppointments = appointments.filter(
-    (apt) => apt.status === 'cancelled' || apt.status === 'completed' || apt.status === 'no-show' || apt.status === 'rejected'
+    (apt) => {
+      const isPastConfirmed = apt.status === 'confirmed' && new Date(`${apt.appointment_date}T${apt.appointment_time}`) < now;
+      return apt.status === 'cancelled' || apt.status === 'completed' || apt.status === 'no-show' || apt.status === 'rejected' || isPastConfirmed;
+    }
   );
 
   const NavItem = ({ id, icon: Icon, label }) => (

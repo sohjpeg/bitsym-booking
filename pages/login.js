@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { useRouter } from 'next/router';
@@ -11,8 +11,26 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn } = useAuth();
+  const { signIn, user, userProfile } = useAuth();
   const router = useRouter();
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (user && userProfile) {
+      switch (userProfile.role) {
+        case 'admin':
+          router.push('/admin/dashboard');
+          break;
+        case 'doctor':
+          router.push('/doctor/dashboard');
+          break;
+        case 'patient':
+        default:
+          router.push('/patient/dashboard');
+          break;
+      }
+    }
+  }, [user, userProfile, router]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
