@@ -29,7 +29,9 @@ export const AuthProvider = ({ children }) => {
     }, 5000);
 
     // Check active session
-    checkUser();
+    checkUser().finally(() => {
+      clearTimeout(timeoutId);
+    });
 
     // Listen for auth changes
     const { data: authListener } = supabase.auth.onAuthStateChange(

@@ -19,34 +19,49 @@ export default function Login() {
     setError('');
     setLoading(true);
 
-    const { data, error } = await signIn(email, password);
+    try {
+      const { data, error } = await signIn(email, password);
 
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-      return;
-    }
-
-    // Redirect based on role
-    const { data: userData } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', data.user.id)
-      .single();
-
-    if (userData) {
-      switch (userData.role) {
-        case 'admin':
-          router.push('/admin/dashboard');
-          break;
-        case 'doctor':
-          router.push('/doctor/dashboard');
-          break;
-        case 'patient':
-        default:
-          router.push('/patient/dashboard');
-          break;
+      if (error) {
+        setError(error.message);
+        setLoading(false);
+        return;
       }
+
+      // Redirect based on role
+      const { data: userData, error: profileError } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError || !userData) {
+        console.error('Error fetching user role:', profileError);
+        setError('Error fetching user profile. Please contact support.');
+        setLoading(false);
+        return;
+      }
+
+      if (userData) {
+        switch (userData.role) {
+          case 'admin':
+            await router.push('/admin/dashboard');
+            break;
+          case 'doctor':
+            await router.push('/doctor/dashboard');
+            break;
+          case 'patient':
+          default:
+            await router.push('/patient/dashboard');
+            break;
+        }
+      } else {
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error('Unexpected login error:', err);
+      setError('An unexpected error occurred. Please try again.');
+      setLoading(false);
     }
   };
 
