@@ -22,6 +22,7 @@ import {
   Mail,
   Plus
 } from 'lucide-react';
+import VoiceBookingButton from '../../components/VoiceBookingButton';
 
 function PatientDashboard() {
   const router = useRouter();
@@ -609,6 +610,7 @@ function PatientDashboard() {
           )}
         </main>
       </div>
+      <VoiceBookingButton />
     </>
   );
 }
