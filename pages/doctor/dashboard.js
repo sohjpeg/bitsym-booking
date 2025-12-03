@@ -17,7 +17,8 @@ import {
   Filter,
   Phone,
   Mail,
-  User
+  User,
+  Save
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 
@@ -29,6 +30,8 @@ function DoctorDashboard() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('upcoming');
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [availability, setAvailability] = useState([]);
+  const [saving, setSaving] = useState(false);
 
   const [processingId, setProcessingId] = useState(null);
   const isInitialMount = useRef(true);
@@ -36,7 +39,7 @@ function DoctorDashboard() {
   // Sync activeTab with URL hash on mount
   useEffect(() => {
     const hash = window.location.hash.replace('#', '');
-    if (hash && ['dashboard', 'schedule', 'patients', 'settings'].includes(hash)) {
+    if (hash && ['dashboard', 'schedule', 'patients', 'settings', 'availability'].includes(hash)) {
       setActiveTab(hash);
     }
   }, []);
@@ -89,7 +92,9 @@ function DoctorDashboard() {
 
         await Promise.all([
           fetchDoctorData(token),
-          fetchAppointments(token)
+          fetchDoctorData(token),
+          fetchAppointments(token),
+          fetchAvailability(token)
         ]);
       } catch (error) {
         console.error('Error loading dashboard data:', error);
@@ -168,6 +173,65 @@ function DoctorDashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchAvailability = async (token) => {
+    try {
+      const response = await fetch('/api/doctor/availability', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Initialize with default days if empty
+        const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        const fullSchedule = days.map(day => {
+          const existing = data.find(d => d.day_of_week === day);
+          return existing || {
+            day_of_week: day,
+            start_time: '09:00:00',
+            end_time: '17:00:00',
+            is_active: false
+          };
+        });
+        setAvailability(fullSchedule);
+      }
+    } catch (error) {
+      console.error('Error fetching availability:', error);
+    }
+  };
+
+  const saveAvailability = async () => {
+    try {
+      setSaving(true);
+      const token = session?.access_token;
+      if (!token) return;
+
+      const response = await fetch('/api/doctor/availability', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ schedule: availability })
+      });
+
+      if (response.ok) {
+        alert('Schedule updated successfully!');
+      } else {
+        throw new Error('Failed to save');
+      }
+    } catch (error) {
+      console.error('Error saving availability:', error);
+      alert('Failed to save schedule');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateDaySchedule = (day, field, value) => {
+    setAvailability(prev => prev.map(item => 
+      item.day_of_week === day ? { ...item, [field]: value } : item
+    ));
   };
 
   const updateAppointmentStatus = async (appointmentId, newStatus) => {
@@ -301,6 +365,7 @@ function DoctorDashboard() {
             <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
             <NavItem id="schedule" icon={Calendar} label="Schedule" />
             <NavItem id="patients" icon={Users} label="Patients" />
+            <NavItem id="availability" icon={Clock} label="Availability" />
             <NavItem id="settings" icon={Settings} label="Settings" />
           </nav>
 
@@ -338,7 +403,8 @@ function DoctorDashboard() {
               <h1 className="text-2xl font-bold text-slate-900">
                 {activeTab === 'dashboard' ? `Welcome back, ${userProfile?.full_name?.startsWith('Dr.') ? userProfile.full_name : `Dr. ${userProfile?.full_name || 'Doctor'}`}!` : 
                  activeTab === 'schedule' ? 'Your Schedule' :
-                 activeTab === 'patients' ? 'My Patients' : 'Settings'}
+                 activeTab === 'patients' ? 'My Patients' :
+                 activeTab === 'availability' ? 'Manage Availability' : 'Settings'}
               </h1>
             </div>
           </header>
@@ -538,6 +604,62 @@ function DoctorDashboard() {
                         </div>
                       ))
                   )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'availability' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                <h3 className="text-lg font-bold text-slate-900">Weekly Schedule</h3>
+                <button
+                  onClick={saveAvailability}
+                  disabled={saving}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  <Save size={18} />
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+              <div className="p-6">
+                <div className="space-y-4">
+                  {availability.map((slot) => (
+                    <div key={slot.day_of_week} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="flex items-center gap-4 min-w-[150px]">
+                        <input
+                          type="checkbox"
+                          checked={slot.is_active}
+                          onChange={(e) => updateDaySchedule(slot.day_of_week, 'is_active', e.target.checked)}
+                          className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500 border-gray-300"
+                        />
+                        <span className={`font-medium ${slot.is_active ? 'text-slate-900' : 'text-slate-400'}`}>
+                          {slot.day_of_week}
+                        </span>
+                      </div>
+                      
+                      <div className={`flex items-center gap-4 ${!slot.is_active && 'opacity-50 pointer-events-none'}`}>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-slate-500">From</span>
+                          <input
+                            type="time"
+                            value={slot.start_time.slice(0, 5)}
+                            onChange={(e) => updateDaySchedule(slot.day_of_week, 'start_time', e.target.value + ':00')}
+                            className="px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-slate-500">To</span>
+                          <input
+                            type="time"
+                            value={slot.end_time.slice(0, 5)}
+                            onChange={(e) => updateDaySchedule(slot.day_of_week, 'end_time', e.target.value + ':00')}
+                            className="px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}

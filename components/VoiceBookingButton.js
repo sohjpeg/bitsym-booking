@@ -203,8 +203,19 @@ export default function VoiceBookingButton() {
         
         case 'offering_slots':
           if (isConfirmation) {
-            // User accepted a suggested slot
-            await confirmBooking();
+            // User accepted a suggested slot - default to the first one
+            const suggestedTime = conversationDataRef.current.suggestedSlots[0]?.time;
+            if (suggestedTime) {
+                setConversationData(prev => ({ ...prev, time: suggestedTime }));
+                await confirmBooking();
+            } else {
+                // Fallback if no suggestions found (shouldn't happen)
+                const response = "Which time would you like?";
+                addToHistory('bot', response);
+                await speak(response);
+                setConversationStage('asking_time');
+                startRecording();
+            }
           } else if (isNegation) {
             // User wants different time
             const response = "What time would you prefer?";
@@ -250,12 +261,37 @@ export default function VoiceBookingButton() {
       const data = interpretRes.data;
 
       if (data.doctor) {
-        setConversationData(prev => ({ ...prev, doctor: data.doctor }));
-        const response = `Great! I'll book with ${data.doctor}. What date works for you?`;
-        addToHistory('bot', response);
-        await speak(response);
-        setConversationStage('asking_date');
-        startRecording();
+        // Validate doctor existence immediately
+        try {
+          const checkRes = await axios.get('/api/patient/check-availability', {
+            params: { doctorName: data.doctor }
+          });
+
+          if (checkRes.data.available === false) {
+             const response = `I couldn't find a doctor named "${data.doctor}". Could you please say the name again?`;
+             addToHistory('bot', response);
+             await speak(response);
+             startRecording();
+             return;
+          }
+
+          // Doctor exists, proceed
+          setConversationData(prev => ({ ...prev, doctor: data.doctor }));
+          const response = `Great! I'll book with ${data.doctor}. What date works for you?`;
+          addToHistory('bot', response);
+          await speak(response);
+          setConversationStage('asking_date');
+          startRecording();
+
+        } catch (validationError) {
+          console.error('Doctor validation error:', validationError);
+          // Fallback if API fails - assume valid or ask again? 
+          // Safer to ask again if we can't verify
+          const response = "I'm having trouble verifying that doctor. Could you say the name again?";
+          addToHistory('bot', response);
+          await speak(response);
+          startRecording();
+        }
       } else {
         const response = "I didn't catch the doctor's name. Could you please repeat it?";
         addToHistory('bot', response);
@@ -318,8 +354,30 @@ export default function VoiceBookingButton() {
 
       const { available, slots, message } = res.data;
       
-      // If doctor was not found
+      // If doctor was not found or unavailable
       if (!available && slots.length === 0) {
+        // Check if it's a "day inactive" case (doctor doesn't work this day)
+        if (res.data.reason === 'day_inactive') {
+            try {
+                const llmRes = await axios.post('/api/generate-response', {
+                    context: {
+                        doctor: doctorName,
+                        requestedDate: date,
+                        reason: 'day_inactive',
+                        // We don't have schedule for this day, but maybe we can infer or just say "not working"
+                    }
+                });
+                const response = llmRes.data.text;
+                addToHistory('bot', response);
+                await speak(response);
+                setConversationStage('asking_date');
+                startRecording();
+                return;
+            } catch (e) {
+                console.error('LLM fail', e);
+            }
+        }
+
         const response = message || `I couldn't find a doctor named "${doctorName}". Could you try a different name?`;
         addToHistory('bot', response);
         await speak(response);
@@ -349,25 +407,71 @@ export default function VoiceBookingButton() {
         // Time not available - offer alternatives
         const availableSlots = slots.filter(s => s.available).slice(0, 3);
         
-        if (availableSlots.length > 0) {
-          setConversationData(prev => ({ 
-            ...prev, 
-            availableSlots: slots,
-            suggestedSlots: availableSlots 
-          }));
-          
-          const times = availableSlots.map(s => s.time.slice(0, 5)).join(', or ');
-          const response = `Sorry, ${requestedTime} is not available. How about ${times}?`;
-          addToHistory('bot', response);
-          await speak(response);
-          setConversationStage('offering_slots');
-          startRecording();
-        } else {
-          const response = `Sorry, there are no available slots for ${date}. Would you like to try a different date?`;
-          addToHistory('bot', response);
-          await speak(response);
-          setConversationStage('asking_date');
-          startRecording();
+        // Determine the reason for unavailability
+        let reason = 'time_unavailable';
+        if (!isTimeAvailable && slots.length > 0) {
+            // Check if time is outside schedule bounds
+            const [reqHour, reqMin] = normalizedRequestedTime.split(':').map(Number);
+            const [startHour, startMin] = res.data.schedule.start.split(':').map(Number);
+            const [endHour, endMin] = res.data.schedule.end.split(':').map(Number);
+            
+            const reqTimeVal = reqHour * 60 + reqMin;
+            const startTimeVal = startHour * 60 + startMin;
+            const endTimeVal = endHour * 60 + endMin;
+            
+            if (reqTimeVal < startTimeVal || reqTimeVal >= endTimeVal) {
+                reason = 'time_out_of_bounds';
+            } else {
+                reason = 'fully_booked';
+            }
+        }
+
+        // Call LLM to generate a helpful response
+        try {
+            const llmRes = await axios.post('/api/generate-response', {
+                context: {
+                    doctor: doctorName,
+                    requestedTime: requestedTime,
+                    date: date,
+                    reason: reason,
+                    schedule: res.data.schedule,
+                    availableSlots: availableSlots.map(s => s.time)
+                }
+            });
+            
+            const response = llmRes.data.text;
+            addToHistory('bot', response);
+            await speak(response);
+            
+            if (availableSlots.length > 0) {
+                setConversationData(prev => ({ 
+                    ...prev, 
+                    availableSlots: slots,
+                    suggestedSlots: availableSlots 
+                }));
+                setConversationStage('offering_slots');
+            } else {
+                setConversationStage('asking_time'); // Or asking_date if day is full
+            }
+            startRecording();
+            
+        } catch (llmError) {
+            console.error('LLM generation failed:', llmError);
+            // Fallback to basic logic
+            if (availableSlots.length > 0) {
+                const times = availableSlots.map(s => s.time.slice(0, 5)).join(', or ');
+                const response = `Sorry, ${requestedTime} is not available. How about ${times}?`;
+                addToHistory('bot', response);
+                await speak(response);
+                setConversationStage('offering_slots');
+                startRecording();
+            } else {
+                const response = `Sorry, there are no available slots for ${date}. Would you like to try a different date?`;
+                addToHistory('bot', response);
+                await speak(response);
+                setConversationStage('asking_date');
+                startRecording();
+            }
         }
       }
 

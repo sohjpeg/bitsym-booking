@@ -193,6 +193,15 @@ export default function BookAppointment() {
         }
       }
 
+      // Validate required fields
+      if (!extractedJson.doctor || !extractedJson.date || !extractedJson.time) {
+        let missing = [];
+        if (!extractedJson.doctor) missing.push('doctor');
+        if (!extractedJson.date) missing.push('date');
+        if (!extractedJson.time) missing.push('time');
+        throw new Error(`Please specify the ${missing.join(', ')}.`);
+      }
+
       const bookingPayload = {
         ...extractedJson,
         patientId: currentPatientId,
@@ -241,6 +250,15 @@ export default function BookAppointment() {
           currentPatientId = data.id;
           setPatientId(currentPatientId);
         }
+      }
+
+      // Validate required fields
+      if (!extractedJson.doctor || !extractedJson.date || !extractedJson.time) {
+        let missing = [];
+        if (!extractedJson.doctor) missing.push('doctor');
+        if (!extractedJson.date) missing.push('date');
+        if (!extractedJson.time) missing.push('time');
+        throw new Error(`Please specify the ${missing.join(', ')}.`);
       }
 
       const bookingPayload = {

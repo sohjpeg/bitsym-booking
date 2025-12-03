@@ -8,8 +8,8 @@ export default async function handler(req, res) {
   try {
     const { doctorId, doctorName, date } = req.query;
 
-    if ((!doctorId && !doctorName) || !date) {
-      return res.status(400).json({ error: 'Missing doctorId/doctorName or date' });
+    if (!doctorId && !doctorName) {
+      return res.status(400).json({ error: 'Missing doctorId or doctorName' });
     }
 
     let targetDoctorId = doctorId;
@@ -45,6 +45,15 @@ export default async function handler(req, res) {
       }
     }
 
+    // If no date is provided, we just wanted to validate the doctor exists
+    if (!date) {
+      return res.status(200).json({ 
+        available: true, 
+        doctorId: targetDoctorId,
+        message: 'Doctor found' 
+      });
+    }
+
     // 1. Get the day of the week (e.g., 'Monday')
     const targetDate = new Date(date);
     const dayOfWeek = targetDate.toLocaleDateString('en-US', { weekday: 'long' });
@@ -65,6 +74,8 @@ export default async function handler(req, res) {
     if (!schedule) {
       return res.status(200).json({ 
         available: false, 
+        reason: 'day_inactive',
+        schedule: null,
         message: `Doctor is not available on ${dayOfWeek}s`,
         slots: [] 
       });
@@ -124,6 +135,18 @@ export default async function handler(req, res) {
       ...slot,
       available: !bookedTimes.has(slot.time)
     }));
+
+    // Check if the specific requested time is available
+    let timeAvailable = true;
+    let reason = null;
+
+    if (slots.length > 0) {
+      // Check if requested time is within bounds
+      // We need to check if the requested time (if provided) is in the generated slots list
+      // But the client might be asking for "8pm" which isn't in the list if the doc closes at 5pm
+      // So we rely on the client to check the 'available' flag for specific slots, 
+      // but here we can provide the schedule context for the LLM.
+    }
 
     return res.status(200).json({
       available: true,

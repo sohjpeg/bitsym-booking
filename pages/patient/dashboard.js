@@ -20,23 +20,25 @@ import {
   MapPin,
   Phone,
   Mail,
-  Plus
+  Plus,
+  Users
 } from 'lucide-react';
 import VoiceBookingButton from '../../components/VoiceBookingButton';
 
 function PatientDashboard() {
   const router = useRouter();
-  const { user, userProfile, signOut } = useAuth();
+  const { user, session, userProfile, loading: authLoading, signOut } = useAuth();
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [patientData, setPatientData] = useState(null);
+  const [doctors, setDoctors] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
   const isInitialMount = useRef(true);
 
   // Sync activeTab with URL hash on mount
   useEffect(() => {
     const hash = window.location.hash.replace('#', '');
-    if (hash && ['dashboard', 'appointments', 'profile', 'settings'].includes(hash)) {
+    if (hash && ['dashboard', 'appointments', 'profile', 'settings', 'doctors'].includes(hash)) {
       setActiveTab(hash);
     }
   }, []);
@@ -64,41 +66,19 @@ function PatientDashboard() {
     }
   }, [loading]);
 
-  const getSessionWithTimeout = async () => {
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Session check timed out')), 10000)
-    );
-    
-    try {
-      const sessionPromise = supabase.auth.getSession();
-      const result = await Promise.race([sessionPromise, timeoutPromise]);
-      return result;
-    } catch (error) {
-      console.error('Session check error:', error);
-      // Return null session on timeout so we can handle it gracefully
-      return { data: { session: null }, error };
-    }
-  };
+
 
   useEffect(() => {
     let mounted = true;
 
     const loadData = async () => {
-      if (!user) return;
+      if (authLoading) return;
+      if (!user || !session) return;
       
       try {
         setLoading(true);
         
-        // Fetch session once to avoid concurrent calls and race conditions
-        const { data: { session }, error: sessionError } = await getSessionWithTimeout();
-        
-        if (sessionError || !session) {
-          console.error('Failed to get active session:', sessionError);
-          // Don't return here, let the functions handle missing token if needed
-          // or just pass null and let them fail gracefully
-        }
-
-        const token = session?.access_token;
+        const token = session.access_token;
 
         if (!token) {
           console.warn('No access token available, skipping data fetch');
@@ -108,7 +88,8 @@ function PatientDashboard() {
 
         await Promise.all([
           fetchPatientData(token),
-          fetchAppointments(token)
+          fetchAppointments(token),
+          fetchDoctors(token)
         ]);
       } catch (error) {
         console.error('Error loading dashboard data:', error);
@@ -124,7 +105,7 @@ function PatientDashboard() {
     return () => {
       mounted = false;
     };
-  }, [user?.id]);
+  }, [user, session, authLoading]);
 
   const fetchPatientData = async (token) => {
     try {
@@ -204,6 +185,20 @@ function PatientDashboard() {
       }
     } catch (error) {
       console.error('Error fetching appointments:', error);
+    }
+  };
+
+  const fetchDoctors = async (token) => {
+    try {
+      const response = await fetch('/api/patient/doctors-availability', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setDoctors(data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching doctors:', error);
     }
   };
 
@@ -303,6 +298,7 @@ function PatientDashboard() {
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
             <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
             <NavItem id="appointments" icon={Calendar} label="Appointments" />
+            <NavItem id="doctors" icon={Users} label="Doctors" />
             <NavItem id="profile" icon={User} label="Profile" />
             <NavItem id="settings" icon={Settings} label="Settings" />
           </nav>
@@ -341,6 +337,7 @@ function PatientDashboard() {
               <h1 className="text-2xl font-bold text-slate-900">
                 {activeTab === 'dashboard' ? `Hello, ${userProfile?.full_name?.split(' ')[0] || 'Patient'}! 👋` :
                  activeTab === 'appointments' ? 'My Appointments' :
+                 activeTab === 'doctors' ? 'Doctors & Availability' :
                  activeTab === 'profile' ? 'My Profile' : 'Settings'}
               </h1>
             </div>
@@ -522,6 +519,56 @@ function PatientDashboard() {
                   ))
                 )}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'doctors' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {doctors.map((doctor) => (
+                <div key={doctor.id} className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-md transition-shadow">
+                  <div className="p-6">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-lg">
+                        {doctor.name.charAt(0)}
+                      </div>
+                      <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-medium">
+                        {doctor.specialty}
+                      </span>
+                    </div>
+                    
+                    <h3 className="text-lg font-bold text-slate-900 mb-1">{doctor.name}</h3>
+                    <p className="text-sm text-slate-500 mb-4">{doctor.email}</p>
+                    
+                    <div className="space-y-2 mb-6">
+                      <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Clinic Timings</h4>
+                      {doctor.schedule.length > 0 ? (
+                        <div className="space-y-1">
+                          {doctor.schedule.map((slot, idx) => (
+                            <div key={idx} className="flex justify-between text-sm">
+                              <span className="text-slate-600 font-medium">{slot.day}</span>
+                              <span className="text-slate-500">{slot.start} - {slot.end}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-400 italic">No schedule available</p>
+                      )}
+                    </div>
+
+                    <Link 
+                      href="/book"
+                      className="block w-full py-2.5 bg-blue-50 text-blue-600 text-center rounded-xl font-medium hover:bg-blue-100 transition-colors"
+                    >
+                      Book Appointment
+                    </Link>
+                  </div>
+                </div>
+              ))}
+              {doctors.length === 0 && !loading && (
+                <div className="col-span-full text-center py-12 text-slate-500">
+                  No doctors found.
+                </div>
+              )}
             </div>
           )}
 
