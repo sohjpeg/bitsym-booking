@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { Mic, X, Loader2, CheckCircle, AlertCircle, Calendar, Clock, User, ChevronRight } from 'lucide-react';
+import { Mic, X, Loader2, CheckCircle, AlertCircle, Calendar, Clock, User, Volume2, MicOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function VoiceBookingButton() {
@@ -8,18 +8,48 @@ export default function VoiceBookingButton() {
   const [isOpen, setIsOpen] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [transcription, setTranscription] = useState('');
-  const [extractedData, setExtractedData] = useState(null);
-  const [bookingResult, setBookingResult] = useState(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState(null);
   const [patientId, setPatientId] = useState(null);
   
-  // Availability State
-  const [availability, setAvailability] = useState(null); // { available: bool, slots: [], message: string }
-  const [selectedSlot, setSelectedSlot] = useState(null); // { time: '10:00' }
+  // Conversation State
+  const [conversationStage, setConversationStageState] = useState('idle');
+  const conversationStageRef = useRef('idle'); // Ref to track stage without closure issues
+  
+  const setConversationStage = (stage) => {
+    setConversationStageState(stage);
+    conversationStageRef.current = stage;
+  };
+
+  const [conversationData, setConversationDataState] = useState({
+    doctor: null,
+    date: null,
+    time: null,
+    availableSlots: [],
+    suggestedSlots: []
+  });
+  const conversationDataRef = useRef({
+    doctor: null,
+    date: null,
+    time: null,
+    availableSlots: [],
+    suggestedSlots: []
+  });
+
+  const setConversationData = (updater) => {
+    setConversationDataState(prev => {
+      const newState = typeof updater === 'function' ? updater(prev) : updater;
+      conversationDataRef.current = newState;
+      return newState;
+    });
+  };
+
+  const [conversationHistory, setConversationHistory] = useState([]);
+  const [bookingResult, setBookingResult] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const speechSynthesisRef = useRef(null);
 
   useEffect(() => {
     // Only use patient_id from userProfile (fetched via API in AuthContext)
@@ -28,14 +58,62 @@ export default function VoiceBookingButton() {
     }
   }, [userProfile]);
 
+  // Text-to-Speech function
+  const speak = (text) => {
+    return new Promise((resolve) => {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      utterance.onstart = () => {
+        setIsSpeaking(true);
+      };
+      
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        resolve();
+      };
+      
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        resolve();
+      };
+      
+      speechSynthesisRef.current = utterance;
+      window.speechSynthesis.speak(utterance);
+    });
+  };
+
+  // Add message to conversation history
+  const addToHistory = (speaker, text) => {
+    setConversationHistory(prev => [...prev, { speaker, text, timestamp: Date.now() }]);
+  };
+
+  // Start the conversation
+  const startConversation = async () => {
+    setConversationStage('asking_doctor');
+    // Reset data
+    setConversationData({
+      doctor: null,
+      date: null,
+      time: null,
+      availableSlots: [],
+      suggestedSlots: []
+    });
+    
+    const greeting = "Hi! I can help you book an appointment. Which doctor would you like to see?";
+    addToHistory('bot', greeting);
+    await speak(greeting);
+    startRecording();
+  };
+
   const startRecording = async () => {
     try {
       setError(null);
-      setTranscription('');
-      setExtractedData(null);
-      setBookingResult(null);
-      setAvailability(null);
-      setSelectedSlot(null);
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -69,6 +147,8 @@ export default function VoiceBookingButton() {
   const processAudio = async (audioBlob) => {
     setIsProcessing(true);
     try {
+      console.log('Processing audio blob...');
+      
       // 1. Transcribe
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.webm');
@@ -76,122 +156,308 @@ export default function VoiceBookingButton() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       const text = transcribeRes.data.text;
-      setTranscription(text);
+      
+      console.log('Transcription:', text);
+      
+      // Add user's message to history
+      addToHistory('user', text);
 
-      // 2. Interpret
-      const interpretRes = await axios.post('/api/interpret', { text });
-      const data = interpretRes.data;
-      setExtractedData(data);
-
-      // 3. Check Availability (if we have doctor and date)
-      if (data.doctor && data.date) {
-        await checkAvailability(data.doctor, data.date, data.time);
-      }
+      // 2. Interpret based on current stage
+      const currentStage = conversationStageRef.current;
+      console.log('Current conversation stage:', currentStage);
+      await handleUserResponse(text);
 
     } catch (err) {
+      console.error('Error in processAudio:', err);
       setError('Failed to process request. Please try again.');
-      console.error(err);
+      const response = "Sorry, I didn't catch that. Could you please repeat?";
+      addToHistory('bot', response);
+      await speak(response);
+      startRecording();
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleUserResponse = async (text) => {
+    try {
+      const currentStage = conversationStageRef.current;
+      const lowerText = text.toLowerCase().replace(/[.,!?]/g, '').trim();
+
+      // Handle confirmations - more flexible regex
+      const isConfirmation = /(yes|yeah|yep|sure|okay|ok|correct|right|that works|sounds good|confirm)/i.test(lowerText);
+      const isNegation = /(no|nope|nah|different|another|change|wrong)/i.test(lowerText);
+
+      switch (currentStage) {
+        case 'asking_doctor':
+          await handleDoctorResponse(text);
+          break;
+        
+        case 'asking_date':
+          await handleDateResponse(text);
+          break;
+        
+        case 'asking_time':
+          await handleTimeResponse(text);
+          break;
+        
+        case 'offering_slots':
+          if (isConfirmation) {
+            // User accepted a suggested slot
+            await confirmBooking();
+          } else if (isNegation) {
+            // User wants different time
+            const response = "What time would you prefer?";
+            addToHistory('bot', response);
+            await speak(response);
+            setConversationStage('asking_time');
+            startRecording();
+          } else {
+            // Try to extract a time from their response
+            await handleTimeResponse(text);
+          }
+          break;
+        
+        case 'confirming':
+          if (isConfirmation) {
+            await confirmBooking();
+          } else {
+            const response = "Okay, let's start over. Which doctor would you like to see?";
+            addToHistory('bot', response);
+            await speak(response);
+            resetConversation();
+            setConversationStage('asking_doctor');
+            startRecording();
+          }
+          break;
+        
+        default:
+          console.warn('Unknown conversation stage:', currentStage);
+      }
+    } catch (error) {
+      console.error('Error in handleUserResponse:', error);
+      const response = "Sorry, I had trouble processing that. Could you try again?";
+      addToHistory('bot', response);
+      await speak(response);
+      startRecording();
+    }
+  };
+
+  const handleDoctorResponse = async (text) => {
+    try {
+      // Use the interpret API to extract doctor name
+      const interpretRes = await axios.post('/api/interpret', { text });
+      const data = interpretRes.data;
+
+      if (data.doctor) {
+        setConversationData(prev => ({ ...prev, doctor: data.doctor }));
+        const response = `Great! I'll book with ${data.doctor}. What date works for you?`;
+        addToHistory('bot', response);
+        await speak(response);
+        setConversationStage('asking_date');
+        startRecording();
+      } else {
+        const response = "I didn't catch the doctor's name. Could you please repeat it?";
+        addToHistory('bot', response);
+        await speak(response);
+        startRecording();
+      }
+    } catch (error) {
+      console.error('Error in handleDoctorResponse:', error);
+      const response = "Sorry, I had trouble understanding. Could you repeat the doctor's name?";
+      addToHistory('bot', response);
+      await speak(response);
+      startRecording();
+    }
+  };
+
+  const handleDateResponse = async (text) => {
+    // Use the interpret API to extract date
+    const interpretRes = await axios.post('/api/interpret', { text });
+    const data = interpretRes.data;
+
+    if (data.date) {
+      setConversationData(prev => ({ ...prev, date: data.date }));
+      const response = "Perfect! What time would you prefer?";
+      addToHistory('bot', response);
+      await speak(response);
+      setConversationStage('asking_time');
+      startRecording();
+    } else {
+      const response = "I didn't understand the date. Could you say it again? For example, 'tomorrow' or 'December 5th'";
+      addToHistory('bot', response);
+      await speak(response);
+      startRecording();
+    }
+  };
+
+  const handleTimeResponse = async (text) => {
+    // Use the interpret API to extract time
+    const interpretRes = await axios.post('/api/interpret', { text });
+    const data = interpretRes.data;
+
+    if (data.time) {
+      setConversationData(prev => ({ ...prev, time: data.time }));
+      
+      // Check availability using ref data
+      const currentData = conversationDataRef.current;
+      await checkAvailability(currentData.doctor, currentData.date, data.time);
+    } else {
+      const response = "I didn't catch the time. Could you say it again? For example, '10 AM' or '2:30 PM'";
+      addToHistory('bot', response);
+      await speak(response);
+      startRecording();
     }
   };
 
   const checkAvailability = async (doctorName, date, requestedTime) => {
     try {
-      // Pass doctorName directly to the API, let the server handle the lookup
       const res = await axios.get('/api/patient/check-availability', {
         params: { doctorName, date }
       });
 
-      // Destructure the response data
       const { available, slots, message } = res.data;
       
-      // If doctor was not found (API returns available: false with empty slots)
+      // If doctor was not found
       if (!available && slots.length === 0) {
-        setError(message || `Could not find a doctor named "${doctorName}"`);
-        setExtractedData(null); // Clear the extracted data to prevent booking
+        const response = message || `I couldn't find a doctor named "${doctorName}". Could you try a different name?`;
+        addToHistory('bot', response);
+        await speak(response);
+        setConversationStage('asking_doctor');
+        startRecording();
         return;
       }
       
-      // Check if requested time is in available slots
-      // Normalize the requested time to HH:MM format for comparison
+      // Normalize the requested time
       let normalizedRequestedTime = requestedTime;
       if (requestedTime && requestedTime.length === 5) {
-        // Already in HH:MM format
         normalizedRequestedTime = requestedTime;
       } else if (requestedTime) {
-        // Might be in other format, try to normalize
         normalizedRequestedTime = requestedTime.slice(0, 5);
       }
       
       const isTimeAvailable = normalizedRequestedTime && slots.some(s => s.time === normalizedRequestedTime && s.available);
       
-      setAvailability({
-        checked: true,
-        available: isTimeAvailable,
-        slots: slots,
-        message: isTimeAvailable ? 'Time is available!' : (message || 'That time is unavailable. Please select a slot below.')
-      });
-
       if (isTimeAvailable) {
-        setSelectedSlot({ time: requestedTime });
+        // Time is available - confirm
+        const response = `Great! ${requestedTime} is available. Should I confirm your appointment with ${doctorName} on ${date} at ${requestedTime}?`;
+        addToHistory('bot', response);
+        await speak(response);
+        setConversationStage('confirming');
+        startRecording();
+      } else {
+        // Time not available - offer alternatives
+        const availableSlots = slots.filter(s => s.available).slice(0, 3);
+        
+        if (availableSlots.length > 0) {
+          setConversationData(prev => ({ 
+            ...prev, 
+            availableSlots: slots,
+            suggestedSlots: availableSlots 
+          }));
+          
+          const times = availableSlots.map(s => s.time.slice(0, 5)).join(', or ');
+          const response = `Sorry, ${requestedTime} is not available. How about ${times}?`;
+          addToHistory('bot', response);
+          await speak(response);
+          setConversationStage('offering_slots');
+          startRecording();
+        } else {
+          const response = `Sorry, there are no available slots for ${date}. Would you like to try a different date?`;
+          addToHistory('bot', response);
+          await speak(response);
+          setConversationStage('asking_date');
+          startRecording();
+        }
       }
 
     } catch (err) {
       console.error('Availability check failed:', err);
-      // If the availability check fails, show an error
-      if (err.response?.data?.message) {
-        setError(err.response.data.message);
-      } else {
-        setError('Could not verify doctor availability. Please try again.');
-      }
-      setExtractedData(null); // Prevent booking on error
+      const response = 'I had trouble checking availability. Could you try again?';
+      addToHistory('bot', response);
+      await speak(response);
+      startRecording();
     }
   };
 
   const confirmBooking = async () => {
-    if (!extractedData || !patientId) return;
-    
-    // Use selected slot if available, otherwise use interpreted time
-    const finalTime = selectedSlot?.time || extractedData.time;
-    
+    const currentData = conversationDataRef.current;
+
+    if (!currentData.doctor || !currentData.date || !currentData.time || !patientId) {
+      console.error('Missing booking data:', { ...currentData, patientId });
+      const response = "I'm missing some information. Let's start over.";
+      addToHistory('bot', response);
+      await speak(response);
+      resetConversation();
+      setConversationStage('asking_doctor');
+      startRecording();
+      return;
+    }
+
     setIsProcessing(true);
     try {
       const payload = { 
-        ...extractedData, 
-        time: finalTime,
+        doctor: currentData.doctor, // API expects 'doctor', not 'doctorName'
+        date: currentData.date,
+        time: currentData.time,
         patientId 
       };
       
       const res = await axios.post('/api/book', payload);
-      setBookingResult(res.data);
+      
+      if (res.status === 200) {
+        setBookingResult({ success: true, message: 'Appointment Booked Successfully!', appointment: payload });
+        setConversationStage('completed');
+        
+        const response = `Perfect! Your appointment is confirmed with ${currentData.doctor} on ${currentData.date} at ${currentData.time}.`;
+        addToHistory('bot', response);
+        await speak(response);
+      }
+      
     } catch (err) {
-      setError(err.response?.data?.error || 'Booking failed. Please try again.');
+      console.error('Booking error:', err);
+      const errorMsg = err.response?.data?.error || 'Booking failed. Please try again.';
+      setError(errorMsg);
+      addToHistory('bot', errorMsg);
+      await speak(errorMsg);
+      // Don't restart conversation on error, let user try again or close
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const resetState = () => {
-    setTranscription('');
-    setExtractedData(null);
+  const resetConversation = () => {
+    setConversationData({
+      doctor: null,
+      date: null,
+      time: null,
+      availableSlots: [],
+      suggestedSlots: []
+    });
+    setConversationHistory([]);
     setBookingResult(null);
-    setAvailability(null);
-    setSelectedSlot(null);
     setError(null);
   };
 
   const closeModal = () => {
     setIsOpen(false);
-    resetState();
+    window.speechSynthesis.cancel();
     stopRecording();
+    resetConversation();
+    setConversationStage('idle');
+  };
+
+  const handleOpenModal = () => {
+    setIsOpen(true);
+    resetConversation();
+    setTimeout(() => startConversation(), 500);
   };
 
   return (
     <>
       {/* Floating Action Button */}
       <button
-        onClick={() => setIsOpen(true)}
+        onClick={handleOpenModal}
         className="fixed bottom-8 right-8 w-16 h-16 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-300 flex items-center justify-center z-50 group"
         aria-label="Voice Booking"
       >
@@ -217,10 +483,56 @@ export default function VoiceBookingButton() {
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {/* Conversation History */}
+              {conversationHistory.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex ${msg.speaker === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                      msg.speaker === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 text-slate-900'
+                    }`}
+                  >
+                    <p className="text-sm">{msg.text}</p>
+                  </div>
+                </div>
+              ))}
+
+              {/* Status Indicators */}
+              {isProcessing && (
+                <div className="flex justify-center">
+                  <div className="bg-slate-100 rounded-2xl px-4 py-2 flex items-center gap-2 text-slate-600">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span className="text-sm">Processing...</span>
+                  </div>
+                </div>
+              )}
+
+              {isSpeaking && (
+                <div className="flex justify-start">
+                  <div className="bg-slate-100 rounded-2xl px-4 py-2 flex items-center gap-2 text-slate-600">
+                    <Volume2 size={16} className="animate-pulse" />
+                    <span className="text-sm">Speaking...</span>
+                  </div>
+                </div>
+              )}
+
+              {isRecording && (
+                <div className="flex justify-end">
+                  <div className="bg-red-100 rounded-2xl px-4 py-2 flex items-center gap-2 text-red-600">
+                    <Mic size={16} className="animate-pulse" />
+                    <span className="text-sm">Listening...</span>
+                  </div>
+                </div>
+              )}
+
               {/* Success State */}
-              {bookingResult ? (
-                <div className="text-center space-y-4">
+              {bookingResult && (
+                <div className="text-center space-y-4 pt-4">
                   <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto text-green-600">
                     <CheckCircle size={32} />
                   </div>
@@ -249,144 +561,42 @@ export default function VoiceBookingButton() {
                     Done
                   </button>
                 </div>
-              ) : (
-                /* Interaction State */
-                <div className="space-y-6">
-                  {/* Status Display */}
-                  <div className="text-center">
-                    {isRecording ? (
-                      <div className="text-red-500 font-medium animate-pulse">Listening...</div>
-                    ) : isProcessing ? (
-                      <div className="text-blue-600 font-medium flex items-center justify-center gap-2">
-                        <Loader2 size={18} className="animate-spin" />
-                        Processing...
-                      </div>
-                    ) : extractedData ? (
-                      <div className="text-slate-900 font-medium">
-                        {availability?.available ? 'Confirm Booking' : 'Select a Time Slot'}
-                      </div>
-                    ) : (
-                      <div className="text-slate-500">Tap microphone to speak</div>
-                    )}
-                  </div>
+              )}
 
-                  {/* Main Action Area */}
-                  <div className="flex justify-center">
-                    {!extractedData && (
-                      <button
-                        onClick={isRecording ? stopRecording : startRecording}
-                        disabled={isProcessing}
-                        className={`
-                          w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300
-                          ${isRecording 
-                            ? 'bg-red-500 shadow-lg shadow-red-200 scale-110' 
-                            : 'bg-blue-600 shadow-lg shadow-blue-200 hover:scale-105'
-                          }
-                          ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}
-                        `}
-                      >
-                        <Mic size={32} className="text-white" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Transcription Preview */}
-                  {transcription && (
-                    <div className="bg-slate-50 p-4 rounded-xl text-center">
-                      <p className="text-slate-600 italic">"{transcription}"</p>
-                    </div>
-                  )}
-
-                  {/* Availability & Slots Grid */}
-                  {availability && !availability.available && (
-                    <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4">
-                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg text-sm">
-                        <AlertCircle size={16} />
-                        {availability.message}
-                      </div>
-                      
-                      <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
-                        {availability.slots.map((slot, idx) => (
-                          <button
-                            key={idx}
-                            disabled={!slot.available}
-                            onClick={() => setSelectedSlot(slot)}
-                            className={`
-                              py-2 px-1 rounded-lg text-sm font-medium transition-all
-                              ${!slot.available 
-                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                                : selectedSlot?.time === slot.time
-                                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200 scale-105'
-                                  : 'bg-white border border-slate-200 text-slate-700 hover:border-blue-300 hover:bg-blue-50'
-                              }
-                            `}
-                          >
-                            {slot.time.slice(0, 5)}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Confirmation Card */}
-                  {extractedData && (
-                    <div className="space-y-4 animate-in slide-in-from-bottom-2">
-                      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-                        <div className="flex items-center gap-3">
-                          <User size={18} className="text-slate-400" />
-                          <div>
-                            <p className="text-xs text-slate-500">Doctor/Specialty</p>
-                            <p className="font-medium text-slate-900">
-                              {extractedData.doctor || extractedData.speciality || 'Any available'}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <Calendar size={18} className="text-slate-400" />
-                          <div>
-                            <p className="text-xs text-slate-500">Date</p>
-                            <p className="font-medium text-slate-900">{extractedData.date || 'Not specified'}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <Clock size={18} className="text-slate-400" />
-                          <div>
-                            <p className="text-xs text-slate-500">Time</p>
-                            <p className={`font-medium ${selectedSlot ? 'text-blue-600' : 'text-slate-900'}`}>
-                              {selectedSlot?.time?.slice(0, 5) || extractedData.time || 'Not specified'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-3">
-                        <button
-                          onClick={resetState}
-                          className="flex-1 py-2.5 border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-colors"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={confirmBooking}
-                          disabled={isProcessing || (availability && !selectedSlot)}
-                          className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {isProcessing ? 'Booking...' : 'Confirm Booking'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Error Message */}
-                  {error && (
-                    <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
-                      <AlertCircle size={16} />
-                      {error}
-                    </div>
-                  )}
+              {/* Error Message */}
+              {error && (
+                <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm">
+                  <AlertCircle size={16} />
+                  {error}
                 </div>
               )}
             </div>
+
+            {/* Footer with Recording Control */}
+            {!bookingResult && conversationStage !== 'idle' && (
+              <div className="p-4 border-t border-slate-100 bg-slate-50 shrink-0">
+                <div className="flex items-center justify-center gap-4">
+                  {isRecording && (
+                    <button
+                      onClick={stopRecording}
+                      className="w-14 h-14 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg transition-all"
+                    >
+                      <MicOff size={24} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      resetConversation();
+                      setConversationStage('idle');
+                      setTimeout(() => startConversation(), 300);
+                    }}
+                    className="text-sm text-slate-600 hover:text-slate-900 transition-colors"
+                  >
+                    Start Over
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
