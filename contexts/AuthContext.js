@@ -40,7 +40,8 @@ export const AuthProvider = ({ children }) => {
         setSession(newSession);
         if (newSession?.user) {
           setUser(newSession.user);
-          await fetchUserProfile(newSession.user.id);
+          // Pass session to avoid redundant getSession() call
+          await fetchUserProfile(newSession.user.id, newSession);
         } else {
           setUser(null);
           setUserProfile(null);
@@ -73,7 +74,8 @@ export const AuthProvider = ({ children }) => {
       if (currentSession?.user) {
         console.log('User found:', currentSession.user.id);
         setUser(currentSession.user);
-        await fetchUserProfile(currentSession.user.id);
+        // Pass session to avoid redundant getSession() call
+        await fetchUserProfile(currentSession.user.id, currentSession);
       } else {
         console.log('No active session');
         setUser(null);
@@ -90,7 +92,8 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const fetchUserProfile = async (userId) => {
+  // Optimized: Accept session parameter to avoid redundant getSession() calls
+  const fetchUserProfile = async (userId, currentSession = null) => {
     try {
       const { data: userData, error } = await supabase
         .from('users')
@@ -105,14 +108,23 @@ export const AuthProvider = ({ children }) => {
         return;
       }
       
+      // Early return if no user data
+      if (!userData) {
+        setUserProfile({ id: userId, role: 'patient' });
+        return;
+      }
+
       let profileData = { ...userData };
 
       // Fetch additional role-specific data
-      if (userData.role === 'patient') {
-        // Use API to bypass RLS recursion
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          try {
+      // Wrap in try-catch so role-specific failures don't block the entire profile
+      try {
+        if (userData.role === 'patient') {
+          // Use API to bypass RLS recursion
+          // Reuse session if provided to avoid redundant getSession call
+          const session = currentSession || (await supabase.auth.getSession()).data.session;
+          
+          if (session?.access_token) {
             const response = await fetch('/api/patient/profile', {
               headers: {
                 Authorization: `Bearer ${session.access_token}`,
@@ -121,24 +133,25 @@ export const AuthProvider = ({ children }) => {
             
             if (response.ok) {
               const patientData = await response.json();
-              if (patientData) {
+              if (patientData?.id) {
                 profileData.patient_id = patientData.id;
               }
             }
-          } catch (err) {
-            console.error('Failed to fetch patient profile via API:', err);
+          }
+        } else if (userData.role === 'doctor') {
+          const { data: doctorData } = await supabase
+            .from('doctors')
+            .select('id')
+            .eq('user_id', userId)
+            .single();
+            
+          if (doctorData?.id) {
+            profileData.doctor_id = doctorData.id;
           }
         }
-      } else if (userData.role === 'doctor') {
-        const { data: doctorData } = await supabase
-          .from('doctors')
-          .select('id')
-          .eq('user_id', userId)
-          .single();
-          
-        if (doctorData) {
-          profileData.doctor_id = doctorData.id;
-        }
+      } catch (roleError) {
+        // Don't fail the entire profile fetch if role-specific data fails
+        console.warn('Failed to fetch role-specific data:', roleError);
       }
 
       console.log('User profile loaded:', profileData);

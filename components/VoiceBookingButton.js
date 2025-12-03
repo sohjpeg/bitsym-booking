@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { Mic, X, Loader2, CheckCircle, AlertCircle, Calendar, Clock, User } from 'lucide-react';
+import { Mic, X, Loader2, CheckCircle, AlertCircle, Calendar, Clock, User, ChevronRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
 
 export default function VoiceBookingButton() {
   const { user, userProfile } = useAuth();
@@ -14,25 +13,20 @@ export default function VoiceBookingButton() {
   const [bookingResult, setBookingResult] = useState(null);
   const [error, setError] = useState(null);
   const [patientId, setPatientId] = useState(null);
+  
+  // Availability State
+  const [availability, setAvailability] = useState(null); // { available: bool, slots: [], message: string }
+  const [selectedSlot, setSelectedSlot] = useState(null); // { time: '10:00' }
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
   useEffect(() => {
+    // Only use patient_id from userProfile (fetched via API in AuthContext)
     if (userProfile?.patient_id) {
       setPatientId(userProfile.patient_id);
-    } else if (user) {
-      // Fallback fetch if not in profile yet
-      supabase
-        .from('patients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single()
-        .then(({ data }) => {
-          if (data) setPatientId(data.id);
-        });
     }
-  }, [user, userProfile]);
+  }, [userProfile]);
 
   const startRecording = async () => {
     try {
@@ -40,6 +34,8 @@ export default function VoiceBookingButton() {
       setTranscription('');
       setExtractedData(null);
       setBookingResult(null);
+      setAvailability(null);
+      setSelectedSlot(null);
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
@@ -84,7 +80,13 @@ export default function VoiceBookingButton() {
 
       // 2. Interpret
       const interpretRes = await axios.post('/api/interpret', { text });
-      setExtractedData(interpretRes.data);
+      const data = interpretRes.data;
+      setExtractedData(data);
+
+      // 3. Check Availability (if we have doctor and date)
+      if (data.doctor && data.date) {
+        await checkAvailability(data.doctor, data.date, data.time);
+      }
 
     } catch (err) {
       setError('Failed to process request. Please try again.');
@@ -94,12 +96,73 @@ export default function VoiceBookingButton() {
     }
   };
 
+  const checkAvailability = async (doctorName, date, requestedTime) => {
+    try {
+      // Pass doctorName directly to the API, let the server handle the lookup
+      const res = await axios.get('/api/patient/check-availability', {
+        params: { doctorName, date }
+      });
+
+      // Destructure the response data
+      const { available, slots, message } = res.data;
+      
+      // If doctor was not found (API returns available: false with empty slots)
+      if (!available && slots.length === 0) {
+        setError(message || `Could not find a doctor named "${doctorName}"`);
+        setExtractedData(null); // Clear the extracted data to prevent booking
+        return;
+      }
+      
+      // Check if requested time is in available slots
+      // Normalize the requested time to HH:MM format for comparison
+      let normalizedRequestedTime = requestedTime;
+      if (requestedTime && requestedTime.length === 5) {
+        // Already in HH:MM format
+        normalizedRequestedTime = requestedTime;
+      } else if (requestedTime) {
+        // Might be in other format, try to normalize
+        normalizedRequestedTime = requestedTime.slice(0, 5);
+      }
+      
+      const isTimeAvailable = normalizedRequestedTime && slots.some(s => s.time === normalizedRequestedTime && s.available);
+      
+      setAvailability({
+        checked: true,
+        available: isTimeAvailable,
+        slots: slots,
+        message: isTimeAvailable ? 'Time is available!' : (message || 'That time is unavailable. Please select a slot below.')
+      });
+
+      if (isTimeAvailable) {
+        setSelectedSlot({ time: requestedTime });
+      }
+
+    } catch (err) {
+      console.error('Availability check failed:', err);
+      // If the availability check fails, show an error
+      if (err.response?.data?.message) {
+        setError(err.response.data.message);
+      } else {
+        setError('Could not verify doctor availability. Please try again.');
+      }
+      setExtractedData(null); // Prevent booking on error
+    }
+  };
+
   const confirmBooking = async () => {
     if (!extractedData || !patientId) return;
     
+    // Use selected slot if available, otherwise use interpreted time
+    const finalTime = selectedSlot?.time || extractedData.time;
+    
     setIsProcessing(true);
     try {
-      const payload = { ...extractedData, patientId };
+      const payload = { 
+        ...extractedData, 
+        time: finalTime,
+        patientId 
+      };
+      
       const res = await axios.post('/api/book', payload);
       setBookingResult(res.data);
     } catch (err) {
@@ -113,6 +176,8 @@ export default function VoiceBookingButton() {
     setTranscription('');
     setExtractedData(null);
     setBookingResult(null);
+    setAvailability(null);
+    setSelectedSlot(null);
     setError(null);
   };
 
@@ -139,10 +204,10 @@ export default function VoiceBookingButton() {
       {/* Modal Overlay */}
       {isOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
             
             {/* Header */}
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
               <h3 className="font-semibold text-slate-900 flex items-center gap-2">
                 <Mic size={18} className="text-blue-600" />
                 Voice Assistant
@@ -152,7 +217,7 @@ export default function VoiceBookingButton() {
               </button>
             </div>
 
-            <div className="p-6">
+            <div className="p-6 overflow-y-auto">
               {/* Success State */}
               {bookingResult ? (
                 <div className="text-center space-y-4">
@@ -197,7 +262,9 @@ export default function VoiceBookingButton() {
                         Processing...
                       </div>
                     ) : extractedData ? (
-                      <div className="text-slate-900 font-medium">Confirm Details</div>
+                      <div className="text-slate-900 font-medium">
+                        {availability?.available ? 'Confirm Booking' : 'Select a Time Slot'}
+                      </div>
                     ) : (
                       <div className="text-slate-500">Tap microphone to speak</div>
                     )}
@@ -230,6 +297,37 @@ export default function VoiceBookingButton() {
                     </div>
                   )}
 
+                  {/* Availability & Slots Grid */}
+                  {availability && !availability.available && (
+                    <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4">
+                      <div className="flex items-center gap-2 text-amber-600 bg-amber-50 p-3 rounded-lg text-sm">
+                        <AlertCircle size={16} />
+                        {availability.message}
+                      </div>
+                      
+                      <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
+                        {availability.slots.map((slot, idx) => (
+                          <button
+                            key={idx}
+                            disabled={!slot.available}
+                            onClick={() => setSelectedSlot(slot)}
+                            className={`
+                              py-2 px-1 rounded-lg text-sm font-medium transition-all
+                              ${!slot.available 
+                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                                : selectedSlot?.time === slot.time
+                                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200 scale-105'
+                                  : 'bg-white border border-slate-200 text-slate-700 hover:border-blue-300 hover:bg-blue-50'
+                              }
+                            `}
+                          >
+                            {slot.time.slice(0, 5)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Confirmation Card */}
                   {extractedData && (
                     <div className="space-y-4 animate-in slide-in-from-bottom-2">
@@ -254,7 +352,9 @@ export default function VoiceBookingButton() {
                           <Clock size={18} className="text-slate-400" />
                           <div>
                             <p className="text-xs text-slate-500">Time</p>
-                            <p className="font-medium text-slate-900">{extractedData.time || 'Not specified'}</p>
+                            <p className={`font-medium ${selectedSlot ? 'text-blue-600' : 'text-slate-900'}`}>
+                              {selectedSlot?.time?.slice(0, 5) || extractedData.time || 'Not specified'}
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -268,8 +368,8 @@ export default function VoiceBookingButton() {
                         </button>
                         <button
                           onClick={confirmBooking}
-                          disabled={isProcessing}
-                          className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                          disabled={isProcessing || (availability && !selectedSlot)}
+                          className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {isProcessing ? 'Booking...' : 'Confirm Booking'}
                         </button>

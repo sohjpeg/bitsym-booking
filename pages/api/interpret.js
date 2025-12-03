@@ -49,6 +49,15 @@ export default async function handler(req, res) {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowDate = tomorrow.toISOString().split('T')[0];
 
+    // Generate next 7 days calendar for LLM context
+    const calendar = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() + i);
+      calendar.push(`- ${d.toISOString().split('T')[0]} is ${d.toLocaleDateString('en-US', { weekday: 'long' })}`);
+    }
+    const calendarContext = calendar.join('\n');
+
     // Groq API configuration
     const groqApiKey = process.env.GROQ_API_KEY;
 
@@ -63,13 +72,16 @@ Current Date Context:
 - Today is ${formattedDate} (${dayOfWeek})
 - Tomorrow is ${tomorrowDate}
 
+Upcoming Days Reference:
+${calendarContext}
+
 Instructions:
 1. Ignore filler words (um, uh, like, you know, etc.)
-2. Convert relative dates to absolute YYYY-MM-DD format:
+2. Convert relative dates to absolute YYYY-MM-DD format using the Reference list above:
    - "tomorrow" → ${tomorrowDate}
-   - "next Tuesday" → calculate next occurrence of Tuesday from ${formattedDate}
+   - "this Friday" / "coming Friday" → Find the date for Friday in the list above
+   - "next Tuesday" → If Tuesday is in the list, use it. If "next" implies the week after, calculate accordingly.
    - "in 3 days" → calculate 3 days from today
-   - If day of week is mentioned, find next occurrence
 3. Parse time in 24-hour format (HH:MM):
    - "2 PM" → "14:00"
    - "morning" → "09:00"
