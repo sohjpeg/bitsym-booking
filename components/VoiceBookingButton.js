@@ -331,12 +331,61 @@ export default function VoiceBookingButton() {
     const data = interpretRes.data;
 
     if (data.date) {
-      setConversationData(prev => ({ ...prev, date: data.date }));
-      const response = "Perfect! What time would you prefer?";
-      addToHistory('bot', response);
-      await speak(response);
-      setConversationStage('asking_time');
-      startRecording();
+      // Validate date availability immediately
+      try {
+        const currentData = conversationDataRef.current;
+        const checkRes = await axios.get('/api/patient/check-availability', {
+          params: { doctorName: currentData.doctor, date: data.date }
+        });
+
+        if (checkRes.data.available === false) {
+          // Doctor not available on this date
+          const response = checkRes.data.message || `Dr. ${currentData.doctor} is not available on ${data.date}. Would you like to try a different date?`;
+          
+          // If we have a reason like 'day_inactive', we can be more specific or offer alternatives
+          if (checkRes.data.reason === 'day_inactive') {
+             // We could use the LLM to generate a better response here using the full schedule
+             try {
+                const llmRes = await axios.post('/api/generate-response', {
+                    context: {
+                        doctor: currentData.doctor,
+                        requestedDate: data.date,
+                        reason: 'day_inactive',
+                        schedule: currentData.schedule // We stored this earlier
+                    }
+                });
+                const llmResponse = llmRes.data.text;
+                addToHistory('bot', llmResponse);
+                await speak(llmResponse);
+                startRecording(); // Stay in asking_date stage
+                return;
+             } catch (e) {
+                console.error('LLM generation failed', e);
+             }
+          }
+
+          addToHistory('bot', response);
+          await speak(response);
+          startRecording(); // Stay in asking_date stage
+          return;
+        }
+
+        // Date is valid, proceed to ask for time
+        setConversationData(prev => ({ ...prev, date: data.date }));
+        const response = "Perfect! What time would you prefer?";
+        addToHistory('bot', response);
+        await speak(response);
+        setConversationStage('asking_time');
+        startRecording();
+
+      } catch (error) {
+        console.error('Date validation error:', error);
+        // Fallback to proceeding if check fails, or ask again
+        const response = "I couldn't verify availability for that date. Could you say it again?";
+        addToHistory('bot', response);
+        await speak(response);
+        startRecording();
+      }
     } else {
       const response = "I didn't understand the date. Could you say it again? For example, 'tomorrow' or 'December 5th'";
       addToHistory('bot', response);
