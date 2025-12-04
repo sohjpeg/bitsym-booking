@@ -147,7 +147,7 @@ export default function VoiceBookingButton() {
   const processAudio = async (audioBlob) => {
     setIsProcessing(true);
     try {
-      console.log('Processing audio blob...');
+      // console.log('Processing audio blob...');
       
       // 1. Transcribe
       const formData = new FormData();
@@ -157,14 +157,14 @@ export default function VoiceBookingButton() {
       });
       const text = transcribeRes.data.text;
       
-      console.log('Transcription:', text);
+      // console.log('Transcription:', text);
       
       // Add user's message to history
       addToHistory('user', text);
 
       // 2. Interpret based on current stage
       const currentStage = conversationStageRef.current;
-      console.log('Current conversation stage:', currentStage);
+      // console.log('Current conversation stage:', currentStage);
       await handleUserResponse(text);
 
     } catch (err) {
