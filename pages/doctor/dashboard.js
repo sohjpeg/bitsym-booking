@@ -21,6 +21,7 @@ import {
   Save
 } from 'lucide-react';
 import { useRouter } from 'next/router';
+import DoctorScheduleCalendar from '../../components/DoctorScheduleCalendar';
 
 function DoctorDashboard() {
   const router = useRouter();
@@ -569,43 +570,7 @@ function DoctorDashboard() {
           )}
 
           {activeTab === 'schedule' && (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-6 border-b border-slate-100">
-                <h3 className="text-lg font-bold text-slate-900">Full Schedule</h3>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {appointments
-                  .filter(apt => new Date(apt.appointment_date) >= new Date().setHours(0,0,0,0))
-                  .length === 0 ? (
-                    <div className="p-12 text-center text-slate-500">No upcoming appointments scheduled.</div>
-                  ) : (
-                    appointments
-                      .filter(apt => new Date(apt.appointment_date) >= new Date().setHours(0,0,0,0))
-                      .map((appointment) => (
-                        <div key={appointment.id} className="p-6 hover:bg-slate-50 transition-colors">
-                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                            <div className="flex items-start gap-4">
-                              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
-                                <User size={24} />
-                              </div>
-                              <div>
-                                <h4 className="font-semibold text-slate-900">{appointment.patient?.user?.full_name || 'Patient'}</h4>
-                                <p className="text-sm text-slate-500">{appointment.patient?.user?.email}</p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-8">
-                              <div className="text-right">
-                                <div className="text-sm font-medium text-slate-900">{formatDate(appointment.appointment_date)}</div>
-                                <div className="text-sm text-slate-500">{formatTime(appointment.appointment_time)}</div>
-                              </div>
-                              {getStatusBadge(appointment.status)}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                  )}
-              </div>
-            </div>
+            <DoctorScheduleCalendar appointments={appointments} />
           )}
 
           {activeTab === 'availability' && (
