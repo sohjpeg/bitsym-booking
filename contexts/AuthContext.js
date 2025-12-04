@@ -23,11 +23,11 @@ export const AuthProvider = ({ children }) => {
   const router = useRouter();
 
   useEffect(() => {
-    // Failsafe: Force loading to false after 5 seconds to prevent infinite loading
+    // Failsafe: Force loading to false after 10 seconds to prevent infinite loading
     const timeoutId = setTimeout(() => {
       console.warn('Auth check timed out, forcing loading to false');
       setLoading(false);
-    }, 5000);
+    }, 10000);
 
     // Check active session
     checkUser().finally(() => {

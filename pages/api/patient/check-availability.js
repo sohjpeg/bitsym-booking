@@ -45,12 +45,30 @@ export default async function handler(req, res) {
       }
     }
 
-    // If no date is provided, we just wanted to validate the doctor exists
+    // If no date is provided, return the full weekly schedule
     if (!date) {
+      const { data: fullSchedule, error: scheduleError } = await dbClient
+        .from('doctor_availability')
+        .select('*')
+        .eq('doctor_id', targetDoctorId)
+        .eq('is_active', true);
+
+      if (scheduleError) {
+        console.error('Error fetching full schedule:', scheduleError);
+        // Fallback to basic response if schedule fetch fails
+        return res.status(200).json({ 
+          available: true, 
+          doctorId: targetDoctorId,
+          message: 'Doctor found',
+          schedule: []
+        });
+      }
+
       return res.status(200).json({ 
         available: true, 
         doctorId: targetDoctorId,
-        message: 'Doctor found' 
+        message: 'Doctor found',
+        schedule: fullSchedule
       });
     }
 

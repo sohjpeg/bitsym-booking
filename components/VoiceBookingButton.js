@@ -261,7 +261,7 @@ export default function VoiceBookingButton() {
       const data = interpretRes.data;
 
       if (data.doctor) {
-        // Validate doctor existence immediately
+        // Validate doctor existence and get schedule immediately
         try {
           const checkRes = await axios.get('/api/patient/check-availability', {
             params: { doctorName: data.doctor }
@@ -276,17 +276,35 @@ export default function VoiceBookingButton() {
           }
 
           // Doctor exists, proceed
-          setConversationData(prev => ({ ...prev, doctor: data.doctor }));
-          const response = `Great! I'll book with ${data.doctor}. What date works for you?`;
-          addToHistory('bot', response);
-          await speak(response);
-          setConversationStage('asking_date');
-          startRecording();
+          const { doctorId, schedule } = checkRes.data;
+          setConversationData(prev => ({ ...prev, doctor: data.doctor, schedule })); // Store schedule
+
+          // Generate a receptionist-style response presenting the schedule
+          try {
+            const llmRes = await axios.post('/api/generate-response', {
+                context: {
+                    doctor: data.doctor,
+                    schedule: schedule,
+                    type: 'schedule_presentation'
+                }
+            });
+            const response = llmRes.data.text;
+            addToHistory('bot', response);
+            await speak(response);
+            setConversationStage('asking_date');
+            startRecording();
+          } catch (llmError) {
+            console.error('LLM generation failed:', llmError);
+            // Fallback
+            const response = `Great! I'll book with ${data.doctor}. What date works for you?`;
+            addToHistory('bot', response);
+            await speak(response);
+            setConversationStage('asking_date');
+            startRecording();
+          }
 
         } catch (validationError) {
           console.error('Doctor validation error:', validationError);
-          // Fallback if API fails - assume valid or ask again? 
-          // Safer to ask again if we can't verify
           const response = "I'm having trouble verifying that doctor. Could you say the name again?";
           addToHistory('bot', response);
           await speak(response);
@@ -359,12 +377,19 @@ export default function VoiceBookingButton() {
         // Check if it's a "day inactive" case (doctor doesn't work this day)
         if (res.data.reason === 'day_inactive') {
             try {
+                // Use stored schedule if available, otherwise use the one from response (which might be null if day_inactive)
+                // But wait, check-availability returns schedule even on day_inactive? 
+                // Actually, our updated check-availability returns full schedule on 'no date', 
+                // but on 'with date' it returns specific day schedule or null if inactive.
+                // We should use the schedule we fetched earlier in handleDoctorResponse.
+                const fullSchedule = conversationDataRef.current.schedule;
+
                 const llmRes = await axios.post('/api/generate-response', {
                     context: {
                         doctor: doctorName,
                         requestedDate: date,
                         reason: 'day_inactive',
-                        // We don't have schedule for this day, but maybe we can infer or just say "not working"
+                        schedule: fullSchedule // Pass full schedule so LLM can suggest valid days
                     }
                 });
                 const response = llmRes.data.text;
